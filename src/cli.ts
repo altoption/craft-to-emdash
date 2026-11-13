@@ -30,6 +30,7 @@ Options for content: give one of --craft or --endpoint
   --sections <a,b>     only these section handles (default: all sections, global sets and redirects)
   --base-url <url>     the site's URL, for assets Craft serves with root-relative URLs
   --page-size <n>      entries per request (default: 100)
+  --timeout <seconds>  how long one request may take (default: 300)
   --download-assets    download every asset into <out>/assets and point the seed at the files.
                        Use it when the assets are not on a public URL, or the site is going away.
   --resume             reuse the sections an interrupted run already finished, and assets already downloaded
@@ -75,6 +76,7 @@ async function main(): Promise<number> {
 			sections: { type: "string" },
 			"base-url": { type: "string" },
 			"page-size": { type: "string", default: "100" },
+			timeout: { type: "string", default: "300" },
 			resume: { type: "boolean", default: false },
 			"download-assets": { type: "boolean", default: false },
 			help: { type: "boolean", short: "h", default: false },
@@ -105,11 +107,16 @@ async function main(): Promise<number> {
 		console.error("--page-size must be a positive whole number");
 		return 2;
 	}
+	const timeoutMs = Number(values.timeout) * 1000;
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+		console.error("--timeout must be a positive number of seconds");
+		return 2;
+	}
 	// the console runs from the project root: two levels above config/project
 	const projectRoot = resolve(resolveConfigDir(projectPath), "..", "..");
 	const transport = values.craft
-		? consoleExecute(values.craft.trim().split(/\s+/), projectRoot)
-		: httpExecute(values.endpoint ?? "", process.env["CRAFT_GQL_TOKEN"]);
+		? consoleExecute(values.craft.trim().split(/\s+/), projectRoot, { timeoutMs })
+		: httpExecute(values.endpoint ?? "", process.env["CRAFT_GQL_TOKEN"], { timeoutMs });
 	const execute = withRetry(transport, 3, (attempt, error) => {
 		process.stderr.write(`\n  request failed (${error.message.split("\n")[0]}); retrying, attempt ${attempt + 1} of 3\n`);
 	});

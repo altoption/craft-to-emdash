@@ -37,13 +37,15 @@ The content pass reads entries through Craft's GraphQL API. Pick how it reaches 
 | `--endpoint <url>` | You only have the live site | A GraphQL schema that can read every section, and its token in `CRAFT_GQL_TOKEN` |
 
 `--craft` runs each query inside Craft against a full-access schema, so it sees every section and status without a
-schema or token being created. Either way the tool only reads: it never sends a mutation.
+schema or token being created. Either way the tool only reads: every request is parsed before it is sent, and
+anything other than a single query is refused.
 
 Other options:
 
 - `--sections blog,pages` reads only those sections.
 - `--base-url https://example.com` resolves assets Craft serves with root-relative URLs.
 - `--page-size 50` sets how many entries each request asks for.
+- `--timeout 600` sets how many seconds one request may take (default 300).
 - `--download-assets` saves every asset into `out/assets/` and points the seed at those files.
 - `--resume` continues an interrupted run, including assets already downloaded.
 

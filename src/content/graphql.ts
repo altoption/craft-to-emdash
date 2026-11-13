@@ -1,4 +1,6 @@
 // Talking to Craft's GraphQL API: two transports, and an index of the schema's types read by introspection.
+import { Kind, parse } from "graphql";
+import type { OperationDefinitionNode } from "graphql";
 import { execFile } from "node:child_process";
 
 export interface GraphqlError {
@@ -28,12 +30,43 @@ export function toResult(body: { data?: Record<string, unknown> | null; errors?:
 	return { data: body.data, errors };
 }
 
-export function httpExecute(endpoint: string, token: string | undefined): Execute {
+export interface TransportOptions {
+	/** How long one request may take before it is abandoned. Default: five minutes. */
+	timeoutMs?: number;
+}
+
+const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+/** The largest response read from Craft's console. A page of entries is a few megabytes at most. */
+const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
+/** Above this the payload goes through standard input: a command line holds about 32 KB on Windows. */
+const ARG_LIMIT = 20_000;
+
+/**
+ * Refuses anything but a single query. The tool only ever builds queries; this makes "read-only towards Craft" a
+ * property of the transport rather than of the code that happens to call it. The document is parsed, since a
+ * mutation can follow a comment, a comma or a fragment and no pattern on the text would be sure to see it.
+ */
+export function assertReadOnly(query: string): void {
+	let operations: OperationDefinitionNode[];
+	try {
+		operations = parse(query).definitions.filter((d): d is OperationDefinitionNode => d.kind === Kind.OPERATION_DEFINITION);
+	} catch (error) {
+		throw new GraphqlRequestError(`Not a valid GraphQL document: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	// exactly one, because no operation name is sent to choose between several
+	if (operations.length !== 1 || operations[0]?.operation !== "query") {
+		throw new GraphqlRequestError("craft-to-emdash only reads from Craft: a request must be a single query");
+	}
+}
+
+export function httpExecute(endpoint: string, token: string | undefined, options: TransportOptions = {}): Execute {
 	return async (query, variables) => {
+		assertReadOnly(query);
 		const response = await fetch(endpoint, {
 			method: "POST",
 			headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
 			body: JSON.stringify({ query, variables }),
+			signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 		});
 		const text = await response.text();
 		try {
@@ -45,34 +78,43 @@ export function httpExecute(endpoint: string, token: string | undefined): Execut
 	};
 }
 
-const ARG_LIMIT = 20_000;
-
 /**
  * Runs queries inside Craft through its console (`<command> exec`), against a full-access schema.
  * It needs no GraphQL schema or token set up in Craft, only a working copy of the site: `php craft`, `ddev craft`…
- * Read-only: it executes queries, never mutations.
+ * That schema can also mutate, so every request passes assertReadOnly first.
  */
-export function consoleExecute(command: string[], cwd: string): Execute {
+export function consoleExecute(command: string[], cwd: string, options: TransportOptions = {}): Execute {
 	const [bin, ...args] = command;
 	if (!bin) throw new Error("The Craft console command is empty");
-	return (query, variables) => {
-		if (/^\s*mutation\b/.test(query)) throw new Error("craft-to-emdash only reads from Craft");
-		// base64 keeps the query intact through the shell and PHP's string parsing
+	const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	const shown = `\`${command.join(" ")} exec\``;
+	return async (query, variables) => {
+		assertReadOnly(query);
+		// No shell is involved. Base64 keeps the query intact inside the PHP string literal, and through whatever
+		// parsing a wrapper such as `ddev` or `docker exec` applies to its arguments.
 		const payload = Buffer.from(JSON.stringify({ query, variables: variables ?? {} })).toString("base64");
-		// A long query would overflow the command line (about 32 KB on Windows), so it goes through standard input.
 		const viaStdin = payload.length > ARG_LIMIT;
 		const php =
 			`$p=json_decode(base64_decode(${viaStdin ? "stream_get_contents(STDIN)" : `"${payload}"`}),true);` +
 			`echo "<<<C2E".json_encode(Craft::$app->getGql()->executeQuery(\\craft\\helpers\\Gql::createFullAccessSchema(),$p["query"],$p["variables"]))."C2E>>>";`;
 		return new Promise((resolve, reject) => {
-			const child = execFile(bin, [...args, "exec", php], { cwd, maxBuffer: 1 << 30 }, (error, stdout, stderr) => {
-				const json = stdout.match(/<<<C2E([\s\S]*)C2E>>>/)?.[1];
-				if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
-					return reject(new GraphqlRequestError(`Could not run "${bin}": the command was not found. Pass the command that runs Craft's console on this machine, e.g. --craft "php craft".`));
+			const child = execFile(bin, [...args, "exec", php], { cwd, maxBuffer: MAX_OUTPUT_BYTES, timeout }, (error, stdout, stderr) => {
+				// A process that failed is a failed request, even if it printed a complete-looking result first.
+				if (error) {
+					const failure = error as NodeJS.ErrnoException & { killed?: boolean };
+					if (failure.code === "ENOENT") {
+						return reject(new GraphqlRequestError(`Could not run "${bin}": the command was not found. Pass the command that runs Craft's console on this machine, e.g. --craft "php craft".`));
+					}
+					if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+						return reject(new GraphqlRequestError(`${shown} answered with more than ${MAX_OUTPUT_BYTES / 1024 / 1024} MB. Ask for fewer entries per request with --page-size.`));
+					}
+					if (failure.killed) return reject(new Error(`${shown} did not finish within ${Math.round(timeout / 1000)} seconds. Raise the limit with --timeout, or lower --page-size.`));
+					return reject(new Error(`${shown} in ${cwd} failed: ${error.message.split("\n")[0]}\n${(stderr || stdout).slice(0, 500)}`));
 				}
+				const json = stdout.match(/<<<C2E([\s\S]*)C2E>>>/)?.[1];
 				if (json === undefined || json === "null") {
 					const hint = viaStdin ? " This query was sent through standard input; if your command runs Craft in a container, make sure it forwards input (docker exec -i)." : "";
-					return reject(new Error(`\`${command.join(" ")} exec\` in ${cwd} gave no result${error ? `: ${error.message}` : ""}.${hint}\n${(stderr || stdout).slice(0, 500)}`));
+					return reject(new Error(`${shown} in ${cwd} gave no result.${hint}\n${(stderr || stdout).slice(0, 500)}`));
 				}
 				try {
 					resolve(toResult(JSON.parse(json)));
@@ -80,6 +122,8 @@ export function consoleExecute(command: string[], cwd: string): Execute {
 					reject(e);
 				}
 			});
+			// The command may exit, or close its input, while a large query is still being written to it.
+			child.stdin?.on("error", (error) => reject(new Error(`${shown} stopped reading the query: ${error.message}`)));
 			child.stdin?.end(viaStdin ? payload : undefined);
 		});
 	};

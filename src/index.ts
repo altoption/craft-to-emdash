@@ -8,5 +8,5 @@ export { downloadAssets } from "./content/assets.ts";
 export type { AssetOptions } from "./content/assets.ts";
 export { readContent } from "./content/content.ts";
 export type { ContentOptions, ContentResult, Progress } from "./content/content.ts";
-export { consoleExecute, httpExecute, introspect, toResult, withRetry } from "./content/graphql.ts";
-export type { Execute, GraphqlResult } from "./content/graphql.ts";
+export { assertReadOnly, consoleExecute, GraphqlRequestError, httpExecute, introspect, toResult, withRetry } from "./content/graphql.ts";
+export type { Execute, GraphqlResult, TransportOptions } from "./content/graphql.ts";
