@@ -27,7 +27,7 @@ const seed = (): SeedFile => ({
 					gone: media("https://cdn.example/missing.pdf", { filename: "missing.pdf" }),
 					moved: media("https://cdn.example/moved.jpg", { filename: "moved.jpg" }),
 					notes: [
-						// addresses an editor put in rich text: one on the machine's own network, one that is not http
+						// addresses that did not come from an asset field: one on the machine's own network, one that is not http
 						{ _type: "image", asset: media("http://169.254.169.254/latest/meta-data/") },
 						{ _type: "image", asset: media("file:///etc/passwd") },
 					],
@@ -53,7 +53,7 @@ describe("downloading assets", () => {
 		const outDir = mkdtempSync(join(tmpdir(), "c2e-assets-"));
 		const { fetch, calls } = fakeFetch();
 		const original = seed();
-		const { seed: out, notes } = await downloadAssets(original, { outDir, fetch, attempts: 1 });
+		const { seed: out, notes } = await downloadAssets(original, { outDir, hosts: ["cdn.example"], fetch, attempts: 1 });
 		const data = out.content?.["posts"]?.[0]?.data as Record<string, { $media: Record<string, string> }>;
 
 		expect(data["hero"]?.$media).toEqual({ file: expect.stringMatching(/^assets\/[0-9a-f]{8}-hero\.jpg$/), filename: "hero.jpg", alt: "Hero" });
@@ -83,12 +83,23 @@ describe("downloading assets", () => {
 		expect((original.content?.["posts"]?.[0]?.data["hero"] as { $media: { url: string } }).$media.url).toBe("https://cdn.example/img/hero.jpg");
 	});
 
+	it("downloads nothing from a host the asset fields did not use, wherever the address sits in the seed", async () => {
+		const outDir = mkdtempSync(join(tmpdir(), "c2e-assets-"));
+		const { fetch, calls } = fakeFetch();
+		// a field-shaped reference to an internal address, as a hand-edited or hostile seed could hold
+		const hostile = seed();
+		(hostile.content?.["posts"]?.[0]?.data as Record<string, unknown>)["hero"] = media("http://10.0.0.5/admin");
+		const { notes } = await downloadAssets(hostile, { outDir, hosts: ["cdn.example"], fetch, attempts: 1 });
+		expect(calls.some((u) => u.includes("10.0.0.5"))).toBe(false);
+		expect(notes[0]?.message).toContain("http://10.0.0.5/admin (not one of the site's asset hosts)");
+	});
+
 	it("does not fetch a file an earlier run already saved", async () => {
 		const outDir = mkdtempSync(join(tmpdir(), "c2e-assets-"));
-		await downloadAssets(seed(), { outDir, fetch: fakeFetch().fetch, attempts: 1 });
+		await downloadAssets(seed(), { outDir, hosts: ["cdn.example"], fetch: fakeFetch().fetch, attempts: 1 });
 		const second = fakeFetch();
 		const progress: string[] = [];
-		await downloadAssets(seed(), { outDir, fetch: second.fetch, attempts: 1, onProgress: (d, t) => progress.push(`${d}/${t}`) });
+		await downloadAssets(seed(), { outDir, hosts: ["cdn.example"], fetch: second.fetch, attempts: 1, onProgress: (d, t) => progress.push(`${d}/${t}`) });
 		expect(second.calls.sort()).toEqual(["https://cdn.example/missing.pdf", "https://cdn.example/moved.jpg"]);
 		expect(progress.at(-1)).toBe("7/7");
 		expect(existsSync(join(outDir, "assets"))).toBe(true);

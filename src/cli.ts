@@ -135,6 +135,7 @@ async function main(): Promise<number> {
 			const tty = process.stderr.isTTY;
 			const assets = await downloadAssets(seed, {
 				outDir,
+				hosts: content.assetHosts,
 				onProgress: (done, total) => {
 					if (tty) process.stderr.write(`\r\x1b[Kassets  ${done}/${total}${done === total ? "\n" : ""}`);
 					else if (done === total || done % 50 === 0) console.error(`assets  ${done}/${total}`);

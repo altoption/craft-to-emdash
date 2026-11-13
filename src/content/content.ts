@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { CraftField, CraftProject } from "../craft/load.ts";
 import type { Binding, EntryPlan, Note, Plan } from "../map/schema.ts";
 import type { RepeaterSubField, SeedContentEntry, SeedField, SeedFile, SeedRedirect, SeedTaxonomyTerm } from "../seed/types.ts";
+import { webHost } from "./assets.ts";
 import { introspect } from "./graphql.ts";
 import type { Execute, FieldType, TypeIndex } from "./graphql.ts";
 import { htmlToBlocks } from "./richtext.ts";
@@ -44,6 +45,8 @@ export interface Progress {
 export interface ContentResult {
 	seed: SeedFile;
 	notes: Note[];
+	/** Hosts of the URLs Craft's asset fields returned: the ones it is safe to download assets from. */
+	assetHosts: string[];
 }
 
 type Json = Record<string, unknown>;
@@ -60,6 +63,8 @@ const isLeaf = (t: FieldType): boolean => t.kind === "SCALAR" || t.kind === "ENU
  */
 const aliased = (entryType: string, handle: string): string => `${entryType.replace(/_(Entry|GlobalSet)$/, "")}__${handle}: ${handle}`;
 const REDIRECT_CODES = new Set([301, 302, 307, 308]);
+/** Changes whenever what a checkpoint holds changes, so an older run's files are read again rather than misread. */
+const CHECKPOINT_VERSION = "2";
 const ALIAS = /^[A-Za-z0-9]+__/;
 
 class ContentReader {
@@ -68,6 +73,9 @@ class ContentReader {
 	/** "<scope>.<field slug>" -> how many entries, blocks or rows lack a value the seed says is required. */
 	private readonly missing = new Map<string, number>();
 	private readonly required = new Map<string, Set<string>>();
+	private readonly assetHosts = new Set<string>();
+	/** The hosts used by the section being read, for its checkpoint: a later run may resume that section alone. */
+	private sectionHosts = new Set<string>();
 	private readonly opts: ContentOptions;
 	private readonly types: TypeIndex;
 
@@ -229,9 +237,15 @@ class ContentReader {
 
 	private media(asset: unknown): Json | null {
 		if (!isObject(asset) || typeof asset["url"] !== "string" || asset["url"] === "") return null;
+		const url = this.url(asset["url"]);
+		const host = webHost(url);
+		if (host) {
+			this.assetHosts.add(host);
+			this.sectionHosts.add(host);
+		}
 		return {
 			$media: {
-				url: this.url(asset["url"]),
+				url,
 				...(typeof asset["filename"] === "string" ? { filename: asset["filename"] } : {}),
 				...(typeof asset["alt"] === "string" && asset["alt"] ? { alt: asset["alt"] } : {}),
 			},
@@ -249,7 +263,9 @@ class ContentReader {
 			for (const [k, v] of Object.entries(value)) {
 				if (k === "__typename") continue;
 				const cleaned = this.raw(v);
-				if (cleaned !== null) out[k.replace(ALIAS, "")] = cleaned;
+				// `$media` and `$ref` mean something to EmDash's seed. A value kept as raw JSON may carry keys an editor
+				// chose (a plugin's JSON field), and those must stay data.
+				if (cleaned !== null) out[k.replace(ALIAS, "").replace(/^\$/, "_$")] = cleaned;
 			}
 			return Object.keys(out).length ? out : null;
 		}
@@ -259,7 +275,8 @@ class ContentReader {
 	private value(b: Binding, v: unknown, scope: string): unknown {
 		switch (b.kind) {
 			case "scalar":
-				return v === "" || v === undefined ? null : v;
+				// a custom scalar can answer with a whole JSON value
+				return typeof v === "object" && v !== null ? this.raw(v) : v === "" || v === undefined ? null : v;
 			case "link": {
 				const url = isObject(v) ? v["url"] : v;
 				return typeof url === "string" && url !== "" ? url : null;
@@ -563,7 +580,7 @@ class ContentReader {
 			const collection = { ...planned, entryTypes: visible };
 			const query = this.entriesQuery(collection.entryTypes);
 			// a checkpoint is only good for the queries that made it: a changed content model reads the section again
-			const key = createHash("sha256").update(query).update(String(this.opts.baseUrl)).digest("hex");
+			const key = createHash("sha256").update(CHECKPOINT_VERSION).update(query).update(String(this.opts.baseUrl)).digest("hex");
 			const file = checkpointDir ? join(checkpointDir, `${collection.slug}.json`) : undefined;
 
 			let saved: Checkpoint | undefined;
@@ -574,13 +591,21 @@ class ContentReader {
 			if (saved) {
 				for (const n of saved.notes) this.note(n.level, n.code, n.where, n.message);
 				for (const [k, n] of saved.missing) this.missing.set(k, (this.missing.get(k) ?? 0) + n);
+				for (const host of saved.assetHosts) this.assetHosts.add(host);
 				onProgress?.({ ...at, fetched: saved.entries.length, count: saved.entries.length, state: "resumed" });
 			} else {
 				const notesBefore = this.notes.length;
 				const missingBefore = new Map(this.missing);
+				this.sectionHosts = new Set();
 				const entries = await this.readCollection(collection, query, (fetched, count) => onProgress?.({ ...at, fetched, count, state: "reading" }));
 				const missing = [...this.missing].filter(([k]) => !missingBefore.has(k) || missingBefore.get(k) !== this.missing.get(k));
-				saved = { key, entries, notes: this.notes.slice(notesBefore), missing: missing.map(([k, n]) => [k, n - (missingBefore.get(k) ?? 0)]) };
+				saved = {
+					key,
+					entries,
+					notes: this.notes.slice(notesBefore),
+					missing: missing.map(([k, n]) => [k, n - (missingBefore.get(k) ?? 0)]),
+					assetHosts: [...this.sectionHosts],
+				};
 				if (file) writeFileSync(file, JSON.stringify(saved));
 				onProgress?.({ ...at, fetched: entries.length, count: entries.length, state: "done" });
 			}
@@ -614,6 +639,7 @@ class ContentReader {
 				...(redirects.length ? { redirects } : {}),
 			},
 			notes: this.notes,
+			assetHosts: [...this.assetHosts].sort(),
 		};
 	}
 }
@@ -623,6 +649,7 @@ interface Checkpoint {
 	entries: SeedContentEntry[];
 	notes: Note[];
 	missing: Array<[string, number]>;
+	assetHosts: string[];
 }
 
 export async function readContent(opts: ContentOptions): Promise<ContentResult> {

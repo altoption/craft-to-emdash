@@ -14,13 +14,14 @@ const ENTRY = "id: ID slug: String status: String siteHandle: String language: S
 const schema = buildSchema(`
 	scalar DateTime
 	scalar Number
+	scalar JSON
 	interface EntryInterface { ${ENTRY} }
 	interface AssetInterface { url: String filename: String! alt: String kind: String! }
 	type uploads_Asset implements AssetInterface { url: String filename: String! alt: String kind: String! }
 	interface CategoryInterface { slug: String title: String parent: CategoryInterface }
 	type topics_Category implements CategoryInterface { slug: String title: String parent: CategoryInterface }
 	type LinkData { url: String label: String type: String }
-	type SeoData { metaTitle: String metaDescription: String image(size: Int!): String }
+	type SeoData { metaTitle: String metaDescription: String image(size: Int!): String extra: JSON }
 	interface pageBuilder_MatrixField { ${ENTRY} }
 	interface cards_MatrixField { ${ENTRY} }
 	interface slides_MatrixField { ${ENTRY} }
@@ -73,7 +74,8 @@ const sections: Record<string, Row[]> = {
 	],
 	home: [
 		entry("homePage", 5, {
-			slug: "home", title: "Home", seo: { metaTitle: "Welcome", metaDescription: "" },
+			// a plugin's JSON value whose keys an editor chose to look like seed instructions
+			slug: "home", title: "Home", seo: { metaTitle: "Welcome", metaDescription: "", extra: { $media: { url: "http://10.0.0.5/secret" }, note: "$ok" } },
 			pageBuilder: [
 				entry("hero", 51, { heading: "Big news", heroImage: [asset("hero.jpg")], ctaLink: { url: "https://example.com/go", label: "Go", type: "url" } }),
 				entry("cardGrid", 52, { heading: "Cards", cards: [entry("card", 521, { heading: "One", summary: "First", heroImage: [], tone: "light" }), entry("card", 522, { heading: "Two", heroImage: [], tone: "" })] }),
@@ -125,7 +127,7 @@ const mapped = mapSchema(project);
 const run = (execute: Execute, extra: Partial<Parameters<typeof readContent>[0]> = {}) =>
 	readContent({ execute, project, plan: mapped.plan, seed: mapped.seed, baseUrl: "https://craft.example", pageSize: 2, ...extra });
 
-const { seed, notes } = await run(fakeCraft().execute);
+const { seed, notes, assetHosts } = await run(fakeCraft().execute);
 const entries = (collection: string): SeedContentEntry[] => seed.content?.[collection] ?? [];
 const byId = (collection: string, id: string): SeedContentEntry => {
 	const found = entries(collection).find((e) => e.id === id);
@@ -208,7 +210,11 @@ describe("content pass on the fixture", () => {
 			},
 		]);
 		// a plugin field is read through whatever scalars its GraphQL type offers, skipping fields that need arguments
-		expect(byId("home", "craft-5").data["seo"]).toEqual({ metaTitle: "Welcome" });
+		// and a key that would be an instruction to EmDash's seed is kept as plain data
+		expect(byId("home", "craft-5").data["seo"]).toEqual({
+			metaTitle: "Welcome",
+			extra: { "_$media": { url: "http://10.0.0.5/secret" }, note: "$ok" },
+		});
 	});
 
 	it("keeps entry types apart when they give one handle to different field types", () => {
@@ -227,6 +233,10 @@ describe("content pass on the fixture", () => {
 		expect(codes("required_relaxed")).toContain("collection blog > field summary");
 		// the schema pass's seed is left as it was
 		expect(mapped.seed.collections.find((c) => c.slug === "blog")?.fields.find((f) => f.slug === "summary")?.required).toBe(true);
+	});
+
+	it("reports the hosts asset fields use, and not those of addresses found in rich text or raw JSON", () => {
+		expect(assetHosts).toEqual(["craft.example"]);
 	});
 
 	it("reads category groups as taxonomy terms", () => {
@@ -315,6 +325,10 @@ describe("running the content pass", () => {
 		const second = await run(down.execute, { checkpointDir, resume: true, onProgress: (p) => seen.push(p) });
 		expect(second.seed).toEqual(first.seed);
 		expect(second.notes).toEqual(first.notes);
+		expect(second.assetHosts).toEqual(first.assetHosts);
+		// a section resumed alone still knows its asset hosts, though an earlier section met the same host first
+		const alone = await run(down.execute, { checkpointDir, resume: true, sections: ["home"] });
+		expect(alone.assetHosts).toEqual(["craft.example"]);
 		expect(seen.map((p) => p.state)).toEqual(["resumed", "resumed", "resumed"]);
 		// without --resume the checkpoints are ignored
 		await expect(run(down.execute, { checkpointDir })).rejects.toThrow();

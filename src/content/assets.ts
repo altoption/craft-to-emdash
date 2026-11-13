@@ -12,6 +12,11 @@ import type { SeedFile } from "../seed/types.ts";
 export interface AssetOptions {
 	/** The folder seed.json is written to; assets go in its `assets` subfolder. */
 	outDir: string;
+	/**
+	 * The only hosts to download from: those Craft's asset fields returned, as reported by the content pass.
+	 * Trust comes from where an address came from, never from where it sits in the seed.
+	 */
+	hosts: Iterable<string>;
 	fetch?: typeof fetch;
 	concurrency?: number;
 	attempts?: number;
@@ -20,26 +25,19 @@ export interface AssetOptions {
 
 type MediaRef = { url?: string | null; file?: string | null; filename?: string };
 
-interface Found {
-	ref: MediaRef;
-	/** True for an image inside rich text, whose address an editor typed or pasted. */
-	inline: boolean;
-}
-
 /** Every `$media` reference in the seed that names a URL. */
-function mediaRefs(value: unknown, found: Found[] = [], inline = false): Found[] {
-	if (Array.isArray(value)) for (const v of value) mediaRefs(v, found, inline);
+function mediaRefs(value: unknown, found: MediaRef[] = []): MediaRef[] {
+	if (Array.isArray(value)) for (const v of value) mediaRefs(v, found);
 	else if (typeof value === "object" && value !== null) {
-		const node = value as Record<string, unknown>;
-		const media = node["$media"];
-		if (typeof media === "object" && media !== null && typeof (media as MediaRef).url === "string") found.push({ ref: media as MediaRef, inline });
-		else for (const v of Object.values(node)) mediaRefs(v, found, inline || node["_type"] === "image");
+		const media = (value as Record<string, unknown>)["$media"];
+		if (typeof media === "object" && media !== null && typeof (media as MediaRef).url === "string") found.push(media as MediaRef);
+		else for (const v of Object.values(value)) mediaRefs(v, found);
 	}
 	return found;
 }
 
 /** The host of an http(s) URL, or undefined for anything else. */
-function webHost(url: string): string | undefined {
+export function webHost(url: string): string | undefined {
 	try {
 		const parsed = new URL(url);
 		return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.host : undefined;
@@ -106,14 +104,13 @@ async function download(
 
 export async function downloadAssets(seed: SeedFile, options: AssetOptions): Promise<{ seed: SeedFile; notes: Note[] }> {
 	const out = structuredClone(seed);
-	const found = mediaRefs(out);
-	const refs = found.map((f) => f.ref);
+	const refs = mediaRefs(out);
 	const urls = [...new Set(refs.map((r) => r.url as string))];
 	const dir = join(options.outDir, "assets");
-	// The hosts Craft's own asset fields point at. An image address inside rich text is whatever an editor entered, so
-	// it is only fetched when it is on one of those hosts: this machine should not request an arbitrary address, such
-	// as one on its private network, and publish the answer as media.
-	const hosts = new Set(found.filter((f) => !f.inline).map((f) => webHost(f.ref.url as string)).filter((h): h is string => h !== undefined));
+	// An image address inside rich text is whatever an editor entered. It is fetched only when it is on a host the
+	// asset fields use: this machine should not request an arbitrary address, such as one on its private network, and
+	// publish the answer as media.
+	const hosts = new Set(options.hosts);
 	const opts = { fetch: options.fetch ?? fetch, attempts: options.attempts ?? 3, hosts };
 	mkdirSync(dir, { recursive: true });
 
