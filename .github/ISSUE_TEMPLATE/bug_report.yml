@@ -1,0 +1,61 @@
+name: Conversion problem
+description: The tool failed, or the seed it wrote is wrong or will not apply
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please remove site names, URLs and tokens, and change field and section names if they are sensitive.
+        Do not attach your `seed.json`: it contains your content.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Say what you expected to see in EmDash and what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: The command you ran
+      description: With any token or private URL removed.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: How the tool reached Craft
+      options:
+        - "schema only (no content)"
+        - "--craft (console)"
+        - "--endpoint (GraphQL token)"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: craft-to-emdash, Craft CMS, EmDash, and any Craft plugin involved.
+      placeholder: craft-to-emdash 0.1.0, Craft 5.10, EmDash 1.5.0, SEOmatic 5.1
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Relevant lines of report.md, or the error
+      description: The notes for the field or section involved, or the error from this tool or from `emdash seed`.
+      render: markdown
+  - type: textarea
+    id: config
+    attributes:
+      label: The smallest project config that shows it
+      description: The YAML of the field, entry type or section from `config/project/`, with names changed. For a field that maps badly, its GraphQL type helps too.
+      render: yaml
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: I reproduced this myself, and this report contains no real site content, URLs or tokens.
+          required: true

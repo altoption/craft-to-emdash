@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/altoption/craft-to-emdash/security/advisories/new
+    about: Please report vulnerabilities privately, not in a public issue. See docs/SECURITY.md.
+  - name: Ask a question
+    url: https://github.com/altoption/craft-to-emdash/discussions
+    about: Questions about using the tool, or about a migration, go in Discussions.
