@@ -63,8 +63,10 @@ const isLeaf = (t: FieldType): boolean => t.kind === "SCALAR" || t.kind === "ENU
  */
 const aliased = (entryType: string, handle: string): string => `${entryType.replace(/_(Entry|GlobalSet)$/, "")}__${handle}: ${handle}`;
 const REDIRECT_CODES = new Set([301, 302, 307, 308]);
+const MAX_BLOCKS = 100;
+const MAX_SELF_NESTING = 3;
 /** Changes whenever what a checkpoint holds changes, so an older run's files are read again rather than misread. */
-const CHECKPOINT_VERSION = "2";
+const CHECKPOINT_VERSION = "3";
 const ALIAS = /^[A-Za-z0-9]+__/;
 
 class ContentReader {
@@ -138,9 +140,11 @@ class ContentReader {
 		return false;
 	}
 
-	private entryFragment(plan: EntryPlan): string {
+	/** `stack` holds the entry types this fragment is nested inside, outermost first. */
+	private entryFragment(plan: EntryPlan, stack: string[] = []): string {
 		const type = plan.gqlType;
-		const fields = plan.bindings.map((b) => this.selection(type, b)).filter((s): s is string => s !== null);
+		const inside = [...stack, plan.uid];
+		const fields = plan.bindings.map((b) => this.selection(type, b, inside)).filter((s): s is string => s !== null);
 		// __typename keeps the fragment valid when the entry type has no fields of its own
 		return `... on ${type} { __typename ${fields.join(" ")} }`;
 	}
@@ -181,7 +185,7 @@ class ContentReader {
 		}
 	}
 
-	private selection(parentType: string, b: Binding): string | null {
+	private selection(parentType: string, b: Binding, stack: string[]): string | null {
 		if (b.kind === "raw") return this.rawSelection(parentType, b.handle, this.opts.project.fields.get(b.fieldUid), []);
 		const type = this.fieldType(parentType, b.handle);
 		if (!type) return null;
@@ -202,13 +206,21 @@ class ContentReader {
 			case "taxonomy":
 				return `${handle} { slug }`;
 			case "blocks":
+			case "children":
 			case "repeater": {
-				const plans = b.kind === "blocks" ? this.opts.plan.blocks : this.opts.plan.rows;
+				const plans = b.kind === "repeater" ? this.opts.plan.rows : this.opts.plan.blocks;
 				const fragments = (b.entryTypeUids ?? [])
 					.map((uid) => plans[uid])
 					.filter((p): p is EntryPlan & { slug: string } => p !== undefined)
 					.filter((p) => this.offers(type, p.gqlType, `${parentType} > field ${b.handle}`))
-					.map((p) => this.entryFragment(p));
+					.filter((p) => {
+						// An entry type can nest itself, and a query cannot be endless. Each type is followed a fixed
+						// number of levels down.
+						if (stack.filter((uid) => uid === p.uid).length < MAX_SELF_NESTING) return true;
+						this.note("decide", "nesting_too_deep", `${parentType} > field ${b.handle}`, `${p.handle} entries can contain ${p.handle} entries. They are read ${MAX_SELF_NESTING} levels deep; anything nested further is not read.`);
+						return false;
+					})
+					.map((p) => this.entryFragment(p, stack));
 				return `${handle} { typeHandle title ${fragments.join(" ")} }`;
 			}
 		}
@@ -305,8 +317,14 @@ class ContentReader {
 				const blocks = list(v).flatMap((item) => {
 					if (!isObject(item)) return [];
 					const plan = (b.entryTypeUids ?? []).map((uid) => this.opts.plan.blocks[uid]).find((p) => p?.handle === item["typeHandle"]);
-					return plan ? [{ _type: plan.slug, ...this.entryData(plan, item, `block:${plan.slug}`).data }] : [];
+					if (!plan) return [];
+					const block = this.entryData(plan, item, `block:${plan.slug}`);
+					// its flattened children follow it in the same list
+					return [{ _type: plan.slug, ...block.data }, ...block.trailing];
 				});
+				if (blocks.length > MAX_BLOCKS) {
+					this.note("decide", "too_many_blocks", `${scope.replace(":", " ")} > field ${b.slug}`, `An entry has ${blocks.length} blocks here once nested entries are flattened, and EmDash holds at most ${MAX_BLOCKS} in a blocks field. Split the page, or merge some nested entries by hand.`);
+				}
 				return blocks.length ? blocks : null;
 			}
 			case "repeater": {
@@ -320,14 +338,22 @@ class ContentReader {
 				const cleaned = this.raw(v);
 				return cleaned !== null && b.rawAsText ? JSON.stringify(cleaned) : cleaned;
 			}
+			// both are written by entryData: one beside the entry's data, the other after the block
 			case "taxonomy":
+			case "children":
 				return null;
 		}
 	}
 
-	private entryData(plan: EntryPlan, item: Json, scope: string): { data: Json; taxonomies: Record<string, string[]> } {
+	private entryData(
+		plan: EntryPlan & { slug?: string },
+		item: Json,
+		scope: string,
+	): { data: Json; taxonomies: Record<string, string[]>; trailing: Json[] } {
 		const data: Json = {};
 		const taxonomies: Record<string, string[]> = {};
+		/** Nested entries flattened into blocks, to be written after this one. */
+		const trailing: Json[] = [];
 		if (plan.hasTitle && typeof item["title"] === "string" && item["title"] !== "") data["title"] = item["title"];
 		for (const b of plan.bindings) {
 			const v = item[`${plan.handle}__${b.handle}`];
@@ -336,13 +362,23 @@ class ContentReader {
 				if (slugs.length) taxonomies[b.slug] = [...(taxonomies[b.slug] ?? []), ...slugs];
 				continue;
 			}
+			if (b.kind === "children") {
+				for (const nested of list(v).filter(isObject)) {
+					const child = (b.entryTypeUids ?? []).map((uid) => this.opts.plan.blocks[uid]).find((p) => p?.handle === nested["typeHandle"]);
+					if (!child) continue;
+					const converted = this.entryData(child, nested, `block:${child.slug}`);
+					const marker = child.belongsTo ? { [child.belongsTo]: `${plan.slug}.${b.slug}` } : {};
+					trailing.push({ _type: child.slug, ...converted.data, ...marker }, ...converted.trailing);
+				}
+				continue;
+			}
 			const value = this.value(b, v, scope);
 			if (value !== null && value !== undefined) data[b.slug] = value;
 		}
 		for (const slug of this.required.get(scope) ?? []) {
 			if (!(slug in data)) this.missing.set(`${scope}.${slug}`, (this.missing.get(`${scope}.${slug}`) ?? 0) + 1);
 		}
-		return { data, taxonomies };
+		return { data, taxonomies, trailing };
 	}
 
 	// ---- reading a site ---------------------------------------------------------------------------------------

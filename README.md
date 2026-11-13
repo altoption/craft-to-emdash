@@ -85,6 +85,7 @@ The tool checks what it can and says so when something is off, but it cannot che
 | Matrix field on an entry | `blocks` field |
 | Nested entry type | Block type |
 | Matrix inside a block, one entry type of simple fields | `repeater` |
+| Matrix inside a block, anything richer | Blocks of their own, written after the parent block |
 | Plain Text, Number, Lightswitch, Dropdown, Date, Link | `string`/`text`, `integer`/`number`, `boolean`, `select`, `datetime`, `url` |
 | CKEditor | `portableText` |
 | Assets | `image`, `file`, or a repeater of images |
@@ -95,12 +96,40 @@ The tool checks what it can and says so when something is off, but it cannot che
 | Retour static redirects | Redirects |
 | System name and time zone | Site title and time zone |
 
+## Nested Matrix fields
+
+EmDash blocks cannot hold other blocks. A nested Matrix whose entries are simple rows becomes a repeater inside the
+block. Anything richer (rich text, several files, a Matrix of its own) is flattened: each nested entry becomes a block
+in the same list, directly after the block it belonged to. An accordion becomes an `accordion` block followed by its
+`accordion_item` blocks, and a third level follows the same way.
+
+Editors get ordinary blocks they can edit. Your templates group them by position: after a parent block, take the
+blocks that follow while their type is one of its child types.
+
+```ts
+// `blocks` is the field's value; CHILDREN maps a parent block type to the types that follow it
+function group(blocks) {
+	const out = [];
+	for (const block of blocks) {
+		const parent = out.at(-1);
+		if (parent && CHILDREN[parent._type]?.includes(block._type)) parent.children.push(block);
+		else out.push({ ...block, children: [] });
+	}
+	return out;
+}
+```
+
+When position alone would not say whose a block is, because its type can also be added to the page by itself or
+hangs off two fields of one parent, the block type gets a `belongs_to` field naming the parent field. It is empty on a
+block that stands alone. The report lists every flattened field and every block type with `belongs_to`.
+
+An entry type that nests itself is read three levels deep, and the report says so.
+
 ## What does not fit
 
 EmDash blocks cannot contain other blocks, references or JSON. Nothing is dropped: a field with no equivalent is
 kept as JSON (a `json` field in a collection, JSON in a `text` field inside a block) and listed in the report under
-"Needs a decision". That covers plugin fields, Matrix fields nested too deeply for a repeater, entry references
-inside blocks, and multi-file asset fields.
+"Needs a decision". That covers plugin fields, entry references inside blocks, and multi-file asset fields.
 
 Read the report's decision count before judging how well a site fits EmDash.
 

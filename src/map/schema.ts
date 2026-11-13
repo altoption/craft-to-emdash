@@ -36,6 +36,7 @@ export type BindingKind =
 	| "taxonomy"
 	| "blocks"
 	| "repeater"
+	| "children"
 	| "raw";
 
 export interface Binding {
@@ -47,7 +48,10 @@ export interface Binding {
 	kind: BindingKind;
 	/** Raw values inside a block are stored as a JSON string, since EmDash blocks allow no json field. */
 	rawAsText?: boolean;
-	/** Matrix entry types: block types for "blocks", the single row type for "repeater". */
+	/**
+	 * Matrix entry types: block types for "blocks", the single row type for "repeater", and for "children" the
+	 * block types of nested entries that are written after their parent block rather than inside it.
+	 */
 	entryTypeUids?: string[];
 }
 
@@ -70,8 +74,11 @@ export interface CollectionPlan {
 
 export interface Plan {
 	collections: CollectionPlan[];
-	/** Block types by Craft entry type uid. */
-	blocks: Record<string, EntryPlan & { slug: string }>;
+	/**
+	 * Block types by Craft entry type uid. `belongsTo` names the field that records which parent a nested block
+	 * follows, present only when its position alone would not say.
+	 */
+	blocks: Record<string, EntryPlan & { slug: string; belongsTo?: string }>;
 	/** Repeater row shapes by Craft entry type uid. */
 	rows: Record<string, EntryPlan>;
 	/** Global sets, each a collection holding one entry. */
@@ -89,6 +96,11 @@ export interface SchemaResult {
 type Context = "collection" | "block" | "repeater";
 
 type Mapped = Pick<SeedField, "type" | "validation" | "defaultValue"> & Pick<Binding, "kind" | "entryTypeUids">;
+
+/** A nested Matrix whose entries become blocks of their own, listed after the block that held them. */
+interface Children {
+	children: string[];
+}
 
 /** What a plugin's presence means for the migration. Anything not listed has no known EmDash counterpart. */
 const PLUGIN_ADVICE: Record<string, string> = {
@@ -178,7 +190,7 @@ class SchemaMapper {
 	}
 
 	/** The EmDash type for a Craft field, or the taxonomy name when the field becomes a taxonomy instead of a field. */
-	private mapType(field: CraftField, ctx: Context, where: string, collection: string | undefined): Mapped | string {
+	private mapType(field: CraftField, ctx: Context, where: string, collection: string | undefined): Mapped | Children | string {
 		const s = field.settings;
 		switch (field.type) {
 			case "craft\\fields\\PlainText": {
@@ -278,7 +290,26 @@ class SchemaMapper {
 		return { kind: "reference", type: "reference", validation: { targetCollection: target, multiple: num(field.settings["maxRelations"]) !== 1 } };
 	}
 
-	private mapMatrix(field: CraftField, ctx: Context, where: string): Mapped {
+	/** The block types that can follow these ones as their flattened children, at any depth. */
+	private descendants(uids: string[]): string[] {
+		const seen = new Set(uids);
+		const out: string[] = [];
+		const queue = [...uids];
+		for (let uid = queue.shift(); uid !== undefined; uid = queue.shift()) {
+			for (const b of this.blockPlans[uid]?.bindings ?? []) {
+				if (b.kind !== "children") continue;
+				for (const child of b.entryTypeUids ?? []) {
+					if (seen.has(child)) continue;
+					seen.add(child);
+					out.push(child);
+					queue.push(child);
+				}
+			}
+		}
+		return out;
+	}
+
+	private mapMatrix(field: CraftField, ctx: Context, where: string): Mapped | Children {
 		const s = field.settings;
 		const uids = uidsOf(s["entryTypes"]);
 		const min = num(s["minEntries"]);
@@ -286,21 +317,31 @@ class SchemaMapper {
 		const limits = { ...(min ? { minItems: min } : {}), ...(max ? { maxItems: max } : {}) };
 
 		if (ctx === "collection") {
+			const direct = uids.map((uid) => this.blockSlug(uid));
+			// nested entries that are flattened sit in this same list, so the field must allow their types too
+			const nested = this.descendants(uids).map((uid) => this.blockSlug(uid));
+			// Craft's limit counts top-level entries only; once nested ones share the list it no longer means the same
+			const cap = max && nested.length === 0 ? { maxItems: Math.min(max, MAX_BLOCKS) } : {};
 			if (max && max > MAX_BLOCKS) this.note("info", "blocks_limit", where, `Craft allows ${max} entries; EmDash blocks fields hold at most ${MAX_BLOCKS}.`);
 			return {
 				kind: "blocks",
 				entryTypeUids: uids,
 				type: "blocks",
-				validation: { allowedTypes: uids.map((uid) => this.blockSlug(uid)), ...limits, ...(max ? { maxItems: Math.min(max, MAX_BLOCKS) } : {}) },
+				validation: { allowedTypes: [...direct, ...nested], ...(min ? { minItems: min } : {}), ...cap },
 			};
 		}
+		if (ctx === "repeater") return this.fallback(ctx, field, where, "a repeater row cannot hold a list of entries.");
+
 		// EmDash blocks cannot nest. A nested Matrix with one entry type of simple fields fits a repeater.
 		const entryType = uids.length === 1 ? this.project.entryTypes.get(uids[0] ?? "") : undefined;
-		if (ctx === "block" && entryType) {
+		if (entryType) {
 			const subFields = this.trySubFields(entryType, `${where} > entry type ${entryType.handle}`);
 			if (subFields) return { kind: "repeater", entryTypeUids: [entryType.uid], type: "repeater", validation: { subFields, ...limits } };
 		}
-		return this.fallback(ctx, field, where, "EmDash blocks cannot contain other blocks, and its nested entries are too rich for a repeater.");
+		// Anything richer is flattened: each nested entry becomes a block of its own, written after its parent.
+		const slugs = uids.map((uid) => this.blockSlug(uid));
+		this.note("info", "flattened", where, `EmDash blocks cannot hold other blocks. Its entries become ${slugs.join(", ")} blocks placed directly after the block they belonged to; group them by position in your templates.`);
+		return { children: uids };
 	}
 
 	/** Maps an entry type as repeater rows; null (and no notes) when any of its fields does not fit. */
@@ -338,9 +379,13 @@ class SchemaMapper {
 			this.note("decide", "missing_entry_type", `entry type ${uid}`, "A Matrix field names an entry type that is not in the project config.");
 			return slug;
 		}
+		// Reserved before its fields are mapped: a nested entry type mapped on the way is then listed after it, and an
+		// entry type that nests itself finds its own slug instead of recursing.
+		const blockType: SeedBlockType = { slug, label: entryType.name, currentVersion: 1, versions: [{ version: 1, fields: [] }] };
+		this.blockTypes.set(slug, blockType);
 		const { fields, plan } = this.layoutFields(entryType, "block", `block ${entryType.handle}`, undefined);
 		this.blockPlans[uid] = { ...plan, slug };
-		this.blockTypes.set(slug, { slug, label: entryType.name, currentVersion: 1, versions: [{ version: 1, fields }] });
+		blockType.versions = [{ version: 1, fields }];
 		return slug;
 	}
 
@@ -374,6 +419,13 @@ class SchemaMapper {
 			const result = this.mapType(field, ctx, fieldWhere, collection);
 			if (typeof result === "string") {
 				plan.bindings.push({ slug: result, handle, fieldUid: field.uid, kind: "taxonomy" });
+				continue;
+			}
+			if ("children" in result) {
+				let slot = toSlug(handle);
+				while (used.has(slot)) slot = `${slot}_2`;
+				used.add(slot);
+				plan.bindings.push({ slug: slot, handle, fieldUid: field.uid, kind: "children", entryTypeUids: result.children });
 				continue;
 			}
 			const { kind, entryTypeUids, ...mapped } = result;
@@ -469,6 +521,40 @@ class SchemaMapper {
 		return out;
 	}
 
+	/**
+	 * A flattened child is found by position: it follows its parent. That stops being enough when the same block type
+	 * can also stand on its own in the list, or hangs off two fields of one parent. Those types get a `belongs_to`
+	 * field saying which parent field each one came from.
+	 */
+	private markAmbiguousChildren(): void {
+		const standalone = new Set<string>();
+		for (const plan of [...this.collectionPlans.flatMap((c) => c.entryTypes), ...this.globalPlans.map((g) => g.plan)]) {
+			for (const b of plan.bindings) if (b.kind === "blocks") for (const uid of b.entryTypeUids ?? []) standalone.add(uid);
+		}
+		const slots = new Map<string, Array<{ parent: string; slot: string }>>();
+		for (const [parentUid, parent] of Object.entries(this.blockPlans)) {
+			for (const b of parent.bindings) {
+				if (b.kind !== "children") continue;
+				for (const child of b.entryTypeUids ?? []) {
+					slots.set(child, [...(slots.get(child) ?? []), { parent: parentUid, slot: `${parent.slug}.${b.slug}` }]);
+				}
+			}
+		}
+		for (const [uid, places] of slots) {
+			const plan = this.blockPlans[uid];
+			const fields = this.blockTypes.get(plan?.slug ?? "")?.versions[0]?.fields;
+			if (!plan || !fields) continue;
+			const parents = places.map((p) => p.parent);
+			const ambiguous = standalone.has(uid) || new Set(parents).size < parents.length || parents.includes(uid);
+			if (!ambiguous) continue;
+			let slug = "belongs_to";
+			while (fields.some((f) => f.slug === slug)) slug = `${slug}_2`;
+			fields.push({ slug, label: "Belongs to", type: "select", validation: { options: places.map((p) => p.slot) } });
+			plan.belongsTo = slug;
+			this.note("info", "belongs_to", `block ${plan.handle}`, `This block can stand alone or follow a parent block, so position alone does not say which. Its ${slug} field names the parent field (${places.map((p) => p.slot).join(", ")}); it is empty on a block that stands alone.`);
+		}
+	}
+
 	/** EmDash has no global sets. Each becomes a collection without URLs, holding the one entry. */
 	private globalSet(set: CraftEntryType, taken: Set<string>): SeedCollection {
 		let slug = `global_${toSlug(set.handle)}`;
@@ -496,6 +582,8 @@ class SchemaMapper {
 			const locales = this.project.sites.map((s) => s.language).join(", ");
 			this.note("info", "locales", "sites", `Add these locales to the EmDash site's i18n configuration before importing content: ${locales}.`);
 		}
+
+		this.markAmbiguousChildren();
 
 		for (const plugin of this.project.plugins) {
 			const advice = PLUGIN_ADVICE[plugin.handle];

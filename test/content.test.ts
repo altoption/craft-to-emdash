@@ -25,6 +25,9 @@ const schema = buildSchema(`
 	interface pageBuilder_MatrixField { ${ENTRY} }
 	interface cards_MatrixField { ${ENTRY} }
 	interface slides_MatrixField { ${ENTRY} }
+	interface panels_MatrixField { ${ENTRY} }
+	type tabs_Entry implements EntryInterface & pageBuilder_MatrixField { ${ENTRY} heading: String panels: [panels_MatrixField]! }
+	type panel_Entry implements EntryInterface & pageBuilder_MatrixField & panels_MatrixField { ${ENTRY} heading: String body: String slides: [slides_MatrixField]! }
 	type article_Entry implements EntryInterface { ${ENTRY}
 		summary: String body: String heroImage: [AssetInterface]! gallery: [AssetInterface]! rating: Number featured: Boolean
 		tone: String publishedOn: DateTime relatedArticles: [EntryInterface]! topics: [CategoryInterface]!
@@ -80,6 +83,15 @@ const sections: Record<string, Row[]> = {
 				entry("hero", 51, { heading: "Big news", heroImage: [asset("hero.jpg")], ctaLink: { url: "https://example.com/go", label: "Go", type: "url" } }),
 				entry("cardGrid", 52, { heading: "Cards", cards: [entry("card", 521, { heading: "One", summary: "First", heroImage: [], tone: "light" }), entry("card", 522, { heading: "Two", heroImage: [], tone: "" })] }),
 				entry("quote", 53, { summary: "Said", relatedArticles: [{ __typename: "article_Entry", id: "1", title: "Hello", slug: "hello" }], topics: [news], slides: [entry("slide", 531, { heading: "S1", body: "<p>Slide</p>" })] }),
+				entry("tabs", 54, {
+					heading: "Tabs",
+					panels: [
+						entry("panel", 541, { heading: "P1", body: "<p>One</p>", slides: [entry("slide", 5411, { heading: "Deep", body: "" })] }),
+						entry("panel", 542, { heading: "P2", body: "", slides: [] }),
+					],
+				}),
+				// a panel the editor placed on the page by itself
+				entry("panel", 55, { heading: "Alone", body: "", slides: [] }),
 			],
 		}),
 	],
@@ -191,7 +203,7 @@ describe("content pass on the fixture", () => {
 		]);
 	});
 
-	it("turns Matrix entries into blocks, repeater rows, and JSON where nothing fits", () => {
+	it("turns Matrix entries into blocks, repeater rows, flattened blocks, and JSON where nothing fits", () => {
 		const blocks = byId("home", "craft-5").data["page_builder"];
 		expect(blocks).toEqual([
 			{
@@ -206,8 +218,16 @@ describe("content pass on the fixture", () => {
 				summary: "Said",
 				related_articles: JSON.stringify([{ id: "1", title: "Hello", slug: "hello" }]),
 				topics: JSON.stringify([{ slug: "news", title: "News" }]),
-				slides: JSON.stringify([{ typeHandle: "slide", heading: "S1", body: "<p>Slide</p>" }]),
 			},
+			// the quote's nested slide, flattened to a block right after it, with real rich text
+			{ _type: "slide", heading: "S1", body: [{ _type: "block", _key: "k1", style: "normal", children: [{ _type: "span", _key: "k2", text: "Slide" }] }] },
+			// three levels: each panel follows its tabs block, and a panel's slide follows that panel
+			{ _type: "tabs", heading: "Tabs" },
+			{ _type: "panel", heading: "P1", body: [{ _type: "block", _key: "k1", style: "normal", children: [{ _type: "span", _key: "k2", text: "One" }] }], belongs_to: "tabs.panels" },
+			{ _type: "slide", heading: "Deep" },
+			{ _type: "panel", heading: "P2", belongs_to: "tabs.panels" },
+			// a panel standing alone has no belongs_to, which is how a template tells the two apart
+			{ _type: "panel", heading: "Alone" },
 		]);
 		// a plugin field is read through whatever scalars its GraphQL type offers, skipping fields that need arguments
 		// and a key that would be an instruction to EmDash's seed is kept as plain data
@@ -278,6 +298,23 @@ describe("global sets and redirects", () => {
 		expect(skipped.join("\n")).toMatch(/matches by pattern.*: \/shop\/\(\.\*\)\./);
 		expect(skipped.join("\n")).toMatch(/points to another site.*: \/partner\./);
 		expect(skipped.join("\n")).toMatch(/status code is 410.*: \/gone\./);
+	});
+
+	it("reads an entry type that nests itself a fixed number of levels deep, and says so", async () => {
+		// a `panel` whose slides field also accepts panels: the query would otherwise never end
+		const looped = structuredClone(mapped.plan);
+		const panel = Object.values(looped.blocks).find((b) => b.handle === "panel");
+		const slides = panel?.bindings.find((b) => b.handle === "slides");
+		if (!panel || !slides) throw new Error("the fixture no longer has panel.slides");
+		slides.entryTypeUids = [...(slides.entryTypeUids ?? []), panel.uid];
+		const { printSchema } = await import("graphql");
+		const loopSchema = buildSchema(printSchema(schema).replace("type panel_Entry implements", "type panel_Entry implements slides_MatrixField &"));
+		const fake = fakeCraft({ schema: loopSchema });
+		const result = await readContent({ execute: fake.execute, project, plan: looped, seed: mapped.seed, sections: ["home"] });
+		const query = fake.queries.find((q) => q.includes("query Entries")) ?? "";
+		// three levels of panel under tabs, and three for a panel placed on the page by itself; none deeper
+		expect(query.match(/\.\.\. on panel_Entry/g)).toHaveLength(6);
+		expect(result.notes.filter((n) => n.code === "nesting_too_deep").map((n) => n.where)).toEqual(["panel_Entry > field slides"]);
 	});
 
 	it("says so when the token's schema cannot see a section, instead of writing it empty", async () => {

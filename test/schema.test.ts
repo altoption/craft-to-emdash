@@ -90,9 +90,10 @@ describe("schema pass on the fixture", () => {
 			slug: "page_builder",
 			label: "Page Builder",
 			type: "blocks",
-			validation: { allowedTypes: ["hero", "card_grid", "quote"], maxItems: 100 },
+			// the block types an editor picks from, then the ones that only ever follow a parent
+			validation: { allowedTypes: ["hero", "card_grid", "quote", "tabs", "panel", "slide"] },
 		});
-		expect(seed.blockTypes?.map((b) => b.slug)).toEqual(["hero", "card_grid", "quote"]);
+		expect(seed.blockTypes?.map((b) => b.slug)).toEqual(["hero", "card_grid", "quote", "slide", "tabs", "panel"]);
 		expect(block("hero").fields.map((f) => [f.slug, f.type])).toEqual([
 			["heading", "string"],
 			["hero_image", "image"],
@@ -118,12 +119,36 @@ describe("schema pass on the fixture", () => {
 		});
 	});
 
+	it("flattens a nested Matrix that is too rich for a repeater into blocks of its own", () => {
+		// quote.slides holds rich text: the field is gone from quote, and slide is a block type
+		expect(block("quote").fields.map((f) => f.slug)).toEqual(["summary", "related_articles", "topics"]);
+		expect(block("slide").fields.map((f) => [f.slug, f.type])).toEqual([
+			["heading", "string"],
+			["body", "portableText"],
+		]);
+		// three levels: tabs > panels > slides
+		expect(block("tabs").fields.map((f) => f.slug)).toEqual(["heading"]);
+		expect(codes("flattened")).toEqual(["block quote > field slides", "block panel > field slides", "block tabs > field panels"]);
+	});
+
+	it("gives a flattened block a belongs_to field only when its position would not say whose it is", () => {
+		// a panel can also be added to the page on its own; a slide only ever follows a quote or a panel
+		expect(block("panel").fields.at(-1)).toEqual({
+			slug: "belongs_to",
+			label: "Belongs to",
+			type: "select",
+			validation: { options: ["tabs.panels"] },
+		});
+		expect(block("slide").fields.some((f) => f.slug === "belongs_to")).toBe(false);
+		expect(codes("belongs_to")).toEqual(["block panel"]);
+	});
+
 	it("keeps what has no equivalent as JSON and says so", () => {
 		expect(field(collection("blog").fields, "attachments").type).toBe("json");
 		expect(field(collection("blog").fields, "anything").type).toBe("json");
 		expect(field(collection("home").fields, "seo").type).toBe("json");
 		// EmDash blocks allow no json, references or nested blocks: the value is kept as JSON text
-		for (const slug of ["related_articles", "topics", "slides"]) expect(field(block("quote").fields, slug).type).toBe("text");
+		for (const slug of ["related_articles", "topics"]) expect(field(block("quote").fields, slug).type).toBe("text");
 
 		expect(codes("plugin_field")).toEqual(["section home > entry type homePage > field seo"]);
 		expect(codes("no_equivalent")).toEqual([
@@ -131,7 +156,6 @@ describe("schema pass on the fixture", () => {
 			"section blog > entry type article > field anything",
 			"block quote > field relatedArticles",
 			"block quote > field topics",
-			"block quote > field slides",
 		]);
 	});
 

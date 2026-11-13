@@ -62,6 +62,8 @@ Node runs `src/` directly by stripping types, so only erasable syntax is allowed
 - GraphQL type names are `<entryTypeHandle>_Entry`. Two entry types may give one handle to fields of different types, so the content pass aliases every field by its entry type.
 - Craft's project config and its GraphQL schema can disagree about which entry types a Matrix field holds. The content pass trusts the GraphQL schema for what it can query.
 - Craft enforces "required" only when an entry is saved live. Real content has gaps.
+- An entry type can nest itself through a Matrix field. Anything that walks entry types needs a bound or a visited set.
+- EmDash blocks cannot nest. A nested Matrix becomes a repeater when its rows are simple and is otherwise flattened into sibling blocks that follow their parent; see the README.
 
 ## Comments
 

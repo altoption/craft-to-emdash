@@ -1,0 +1,26 @@
+fieldLayouts:
+  00000000-0000-4000-8000-00000000le10:
+    tabs:
+      -
+        elements:
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f13
+            handle: null
+            label: null
+            required: true
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f02
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f18
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+handle: panel
+hasTitleField: false
+name: 'Panel'

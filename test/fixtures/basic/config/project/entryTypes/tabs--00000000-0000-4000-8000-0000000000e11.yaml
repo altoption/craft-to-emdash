@@ -1,0 +1,20 @@
+fieldLayouts:
+  00000000-0000-4000-8000-00000000le11:
+    tabs:
+      -
+        elements:
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f13
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f19
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+handle: tabs
+hasTitleField: false
+name: 'Tabs'
