@@ -44,7 +44,8 @@ Other options:
 - `--sections blog,pages` reads only those sections.
 - `--base-url https://example.com` resolves assets Craft serves with root-relative URLs.
 - `--page-size 50` sets how many entries each request asks for.
-- `--resume` continues an interrupted run.
+- `--download-assets` saves every asset into `out/assets/` and points the seed at those files.
+- `--resume` continues an interrupted run, including assets already downloaded.
 
 Progress is printed per section. Each finished section is saved under `out/.checkpoints/`, a failed request is tried
 three times, and `--resume` reuses what an earlier run finished. `seed.json` and the checkpoints hold your content,
@@ -62,10 +63,11 @@ The tool checks what it can and says so when something is off, but it cannot che
 - **`--endpoint` needs a schema that can read everything you want.** Craft answers a token that lacks a section with
   nothing, not with an error. The report lists each section and global set the schema does not include; a section
   missing from the report was read.
-- **EmDash must be able to fetch your assets.** Applying the seed downloads each asset from its URL. EmDash refuses
-  local and private addresses, so assets served from a development machine (`*.ddev.site`, `localhost`) are not
-  downloaded. Read from a copy whose assets are on a public URL, or apply with `--skip-media` and move the files
-  yourself.
+- **Assets have to be reachable by something.** By default the seed names each asset by URL and EmDash fetches it
+  when the seed is applied. EmDash refuses local and private addresses, so that fails for assets served from a
+  development machine (`*.ddev.site`, `localhost`). `--download-assets` fetches them from the machine running this
+  tool instead and writes them next to the seed; keep `seed.json` and `assets/` together when you move them. An asset
+  that cannot be downloaded stays a URL in the seed and is listed in the report.
 - **`emdash seed` writes to a local SQLite database.** For a site on Cloudflare D1, apply the seed locally and move
   it with EmDash's site transfer, or use the seed at setup.
 - **Locales exist in EmDash first.** A multi-site Craft project needs each language added to the EmDash site's i18n

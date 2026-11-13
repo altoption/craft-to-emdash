@@ -2,6 +2,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { downloadAssets } from "./content/assets.ts";
 import { readContent } from "./content/content.ts";
 import type { Progress } from "./content/content.ts";
 import { consoleExecute, httpExecute, withRetry } from "./content/graphql.ts";
@@ -29,7 +30,9 @@ Options for content: give one of --craft or --endpoint
   --sections <a,b>     only these section handles (default: all sections, global sets and redirects)
   --base-url <url>     the site's URL, for assets Craft serves with root-relative URLs
   --page-size <n>      entries per request (default: 100)
-  --resume             reuse the sections an interrupted run already finished
+  --download-assets    download every asset into <out>/assets and point the seed at the files.
+                       Use it when the assets are not on a public URL, or the site is going away.
+  --resume             reuse the sections an interrupted run already finished, and assets already downloaded
 
 Then, in an EmDash project:
   npx emdash seed out/seed.json --validate
@@ -73,6 +76,7 @@ async function main(): Promise<number> {
 			"base-url": { type: "string" },
 			"page-size": { type: "string", default: "100" },
 			resume: { type: "boolean", default: false },
+			"download-assets": { type: "boolean", default: false },
 			help: { type: "boolean", short: "h", default: false },
 		},
 	});
@@ -125,7 +129,21 @@ async function main(): Promise<number> {
 			...(values.sections ? { sections: values.sections.split(",").map((s) => s.trim()).filter(Boolean) } : {}),
 			...(values["base-url"] ? { baseUrl: values["base-url"] } : {}),
 		});
-		write(outDir, { seed: content.seed, notes: [...schema.notes, ...content.notes] });
+		let { seed } = content;
+		const notes = [...schema.notes, ...content.notes];
+		if (values["download-assets"]) {
+			const tty = process.stderr.isTTY;
+			const assets = await downloadAssets(seed, {
+				outDir,
+				onProgress: (done, total) => {
+					if (tty) process.stderr.write(`\r\x1b[Kassets  ${done}/${total}${done === total ? "\n" : ""}`);
+					else if (done === total || done % 50 === 0) console.error(`assets  ${done}/${total}`);
+				},
+			});
+			seed = assets.seed;
+			notes.push(...assets.notes);
+		}
+		write(outDir, { seed, notes });
 		return 0;
 	} catch (error) {
 		console.error(`\n${error instanceof Error ? error.message : error}`);
