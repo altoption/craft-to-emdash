@@ -67,7 +67,8 @@ The tool checks what it can and says so when something is off, but it cannot che
   when the seed is applied. EmDash refuses local and private addresses, so that fails for assets served from a
   development machine (`*.ddev.site`, `localhost`). `--download-assets` fetches them from the machine running this
   tool instead and writes them next to the seed; keep `seed.json` and `assets/` together when you move them. An asset
-  that cannot be downloaded stays a URL in the seed and is listed in the report.
+  that cannot be downloaded stays a URL in the seed and is listed in the report. Only the hosts your asset fields
+  point at are requested: an image address typed into rich text on any other host is left as a URL.
 - **`emdash seed` writes to a local SQLite database.** For a site on Cloudflare D1, apply the seed locally and move
   it with EmDash's site transfer, or use the seed at setup.
 - **Locales exist in EmDash first.** A multi-site Craft project needs each language added to the EmDash site's i18n

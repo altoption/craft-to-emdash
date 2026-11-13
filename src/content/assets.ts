@@ -20,15 +20,32 @@ export interface AssetOptions {
 
 type MediaRef = { url?: string | null; file?: string | null; filename?: string };
 
+interface Found {
+	ref: MediaRef;
+	/** True for an image inside rich text, whose address an editor typed or pasted. */
+	inline: boolean;
+}
+
 /** Every `$media` reference in the seed that names a URL. */
-function mediaRefs(value: unknown, found: MediaRef[] = []): MediaRef[] {
-	if (Array.isArray(value)) for (const v of value) mediaRefs(v, found);
+function mediaRefs(value: unknown, found: Found[] = [], inline = false): Found[] {
+	if (Array.isArray(value)) for (const v of value) mediaRefs(v, found, inline);
 	else if (typeof value === "object" && value !== null) {
-		const media = (value as Record<string, unknown>)["$media"];
-		if (typeof media === "object" && media !== null && typeof (media as MediaRef).url === "string") found.push(media as MediaRef);
-		else for (const v of Object.values(value)) mediaRefs(v, found);
+		const node = value as Record<string, unknown>;
+		const media = node["$media"];
+		if (typeof media === "object" && media !== null && typeof (media as MediaRef).url === "string") found.push({ ref: media as MediaRef, inline });
+		else for (const v of Object.values(node)) mediaRefs(v, found, inline || node["_type"] === "image");
 	}
 	return found;
+}
+
+/** The host of an http(s) URL, or undefined for anything else. */
+function webHost(url: string): string | undefined {
+	try {
+		const parsed = new URL(url);
+		return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.host : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -48,10 +65,31 @@ function localName(url: string, filename: string | undefined): string {
 	return `${createHash("sha1").update(url).digest("hex").slice(0, 8)}-${safe}`;
 }
 
-async function download(url: string, target: string, opts: Required<Pick<AssetOptions, "fetch" | "attempts">>): Promise<void> {
+/** Thrown for an address this tool will not request; trying again would not change that. */
+class Refused extends Error {}
+
+/** Follows redirects by hand, so a redirect cannot lead to a host the first address was not allowed to name. */
+async function fetchAllowed(url: string, hosts: Set<string>, doFetch: typeof fetch): Promise<Response> {
+	let current = url;
+	for (let hop = 0; hop < 5; hop++) {
+		const host = webHost(current);
+		if (!host || !hosts.has(host)) throw new Refused(hop === 0 ? "not one of the site's asset hosts" : `redirects to ${host ?? "an address that is not http"}`);
+		const response = await doFetch(current, { redirect: "manual" });
+		const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
+		if (!location) return response;
+		current = new URL(location, current).toString();
+	}
+	throw new Refused("too many redirects");
+}
+
+async function download(
+	url: string,
+	target: string,
+	opts: Required<Pick<AssetOptions, "fetch" | "attempts">> & { hosts: Set<string> },
+): Promise<void> {
 	for (let attempt = 1; ; attempt++) {
 		try {
-			const response = await opts.fetch(url);
+			const response = await fetchAllowed(url, opts.hosts, opts.fetch);
 			if (!response.ok) throw new Error(`HTTP ${response.status}`);
 			const bytes = Buffer.from(await response.arrayBuffer());
 			if (bytes.length === 0) throw new Error("the file is empty");
@@ -60,7 +98,7 @@ async function download(url: string, target: string, opts: Required<Pick<AssetOp
 			renameSync(`${target}.part`, target);
 			return;
 		} catch (error) {
-			if (attempt >= opts.attempts) throw error;
+			if (attempt >= opts.attempts || error instanceof Refused) throw error;
 			await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
 		}
 	}
@@ -68,10 +106,15 @@ async function download(url: string, target: string, opts: Required<Pick<AssetOp
 
 export async function downloadAssets(seed: SeedFile, options: AssetOptions): Promise<{ seed: SeedFile; notes: Note[] }> {
 	const out = structuredClone(seed);
-	const refs = mediaRefs(out);
+	const found = mediaRefs(out);
+	const refs = found.map((f) => f.ref);
 	const urls = [...new Set(refs.map((r) => r.url as string))];
 	const dir = join(options.outDir, "assets");
-	const opts = { fetch: options.fetch ?? fetch, attempts: options.attempts ?? 3 };
+	// The hosts Craft's own asset fields point at. An image address inside rich text is whatever an editor entered, so
+	// it is only fetched when it is on one of those hosts: this machine should not request an arbitrary address, such
+	// as one on its private network, and publish the answer as media.
+	const hosts = new Set(found.filter((f) => !f.inline).map((f) => webHost(f.ref.url as string)).filter((h): h is string => h !== undefined));
+	const opts = { fetch: options.fetch ?? fetch, attempts: options.attempts ?? 3, hosts };
 	mkdirSync(dir, { recursive: true });
 
 	const files = new Map<string, string>();
