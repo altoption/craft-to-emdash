@@ -1,3 +1,19 @@
 dateModified: 1700000000
+plugins:
+  ckeditor:
+    edition: standard
+    enabled: true
+    schemaVersion: 3.0.0.0
+  seomatic:
+    edition: standard
+    enabled: true
+    schemaVersion: 3.0.13
+  _site-module:
+    enabled: true
+    schemaVersion: 1.0.0
 system:
-  name: Fixture
+  edition: pro
+  live: true
+  name: 'Fixture Site'
+  schemaVersion: 5.8.0.3
+  timeZone: Europe/London

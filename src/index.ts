@@ -1,6 +1,10 @@
 export { loadCraftProject, resolveConfigDir, unpackAssoc } from "./craft/load.ts";
 export type { CraftEntryType, CraftField, CraftProject, CraftSection, CraftSite } from "./craft/load.ts";
 export { mapSchema, toSlug } from "./map/schema.ts";
-export type { Note, SchemaResult } from "./map/schema.ts";
+export type { Binding, EntryPlan, Note, Plan, SchemaResult } from "./map/schema.ts";
 export { renderReport } from "./report.ts";
 export type * from "./seed/types.ts";
+export { readContent } from "./content/content.ts";
+export type { ContentOptions, ContentResult, Progress } from "./content/content.ts";
+export { consoleExecute, httpExecute, introspect, toResult, withRetry } from "./content/graphql.ts";
+export type { Execute, GraphqlResult } from "./content/graphql.ts";

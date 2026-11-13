@@ -24,15 +24,81 @@ export interface Note {
 	message: string;
 }
 
+/** How the content pass reads one Craft field and writes it into the seed. */
+export type BindingKind =
+	| "scalar"
+	| "link"
+	| "richtext"
+	| "image"
+	| "file"
+	| "images"
+	| "reference"
+	| "taxonomy"
+	| "blocks"
+	| "repeater"
+	| "raw";
+
+export interface Binding {
+	/** Seed field slug; for a taxonomy, the taxonomy name. */
+	slug: string;
+	/** Field handle in Craft's GraphQL API. */
+	handle: string;
+	fieldUid: string;
+	kind: BindingKind;
+	/** Raw values inside a block are stored as a JSON string, since EmDash blocks allow no json field. */
+	rawAsText?: boolean;
+	/** Matrix entry types: block types for "blocks", the single row type for "repeater". */
+	entryTypeUids?: string[];
+}
+
+export interface EntryPlan {
+	uid: string;
+	handle: string;
+	hasTitle: boolean;
+	bindings: Binding[];
+}
+
+export interface CollectionPlan {
+	slug: string;
+	section: string;
+	/** True when several entry types share the collection and `entry_type` tells them apart. */
+	discriminator: boolean;
+	entryTypes: EntryPlan[];
+}
+
+export interface Plan {
+	collections: CollectionPlan[];
+	/** Block types by Craft entry type uid. */
+	blocks: Record<string, EntryPlan & { slug: string }>;
+	/** Repeater row shapes by Craft entry type uid. */
+	rows: Record<string, EntryPlan>;
+	taxonomies: Array<{ name: string; group: string }>;
+}
+
 export interface SchemaResult {
 	seed: SeedFile;
 	notes: Note[];
+	plan: Plan;
 }
 
 /** Where a field sits decides which EmDash field types it may use. */
 type Context = "collection" | "block" | "repeater";
 
-type Mapped = Pick<SeedField, "type" | "validation" | "defaultValue">;
+type Mapped = Pick<SeedField, "type" | "validation" | "defaultValue"> & Pick<Binding, "kind" | "entryTypeUids">;
+
+/** What a plugin's presence means for the migration. Anything not listed has no known EmDash counterpart. */
+const PLUGIN_ADVICE: Record<string, string> = {
+	ckeditor: "Rich text is converted to Portable Text.",
+	redactor: "Rich text is converted to Portable Text.",
+	seomatic: "Per-entry SEO values are kept as JSON. Turn on `seo` for the collections that need it and map titles and descriptions by hand.",
+	retour: "Redirects live in Retour's own tables, not in entries. Export them from Retour as CSV; they are not converted yet.",
+	freeform: "Forms and submissions are not converted. Rebuild the forms with EmDash's forms plugin.",
+	formie: "Forms and submissions are not converted. Rebuild the forms with EmDash's forms plugin.",
+	"feed-me": "Feed definitions are not converted; imported entries are ordinary entries and come across with the content.",
+	sprig: "Template behaviour, not content. Rebuild the interactive parts in Astro.",
+	"craft-cloud": "Hosting integration; nothing to convert.",
+	cloud: "Hosting integration; nothing to convert.",
+};
 
 const RESERVED = new Set([
 	"id", "slug", "status", "author_id", "primary_byline_id", "created_at", "updated_at", "published_at",
@@ -77,6 +143,9 @@ class SchemaMapper {
 	private readonly blockSlugByUid = new Map<string, string>();
 	private readonly collectionSlugBySection = new Map<string, string>();
 	private readonly taxonomyCollections = new Map<string, Set<string>>();
+	private readonly blockPlans: Plan["blocks"] = {};
+	private readonly rowPlans: Plan["rows"] = {};
+	private readonly collectionPlans: CollectionPlan[] = [];
 	/** Counts fallbacks, so a trial mapping can tell whether it was clean. */
 	private fallbacks = 0;
 
@@ -100,30 +169,30 @@ class SchemaMapper {
 			where,
 			`${shortType(field.type)}${plugin ? " (plugin field)" : ""}: ${reason} Kept as ${ctx === "collection" ? "a json field" : "JSON in a text field"}.`,
 		);
-		return { type: ctx === "collection" ? "json" : "text" };
+		return { type: ctx === "collection" ? "json" : "text", kind: "raw" };
 	}
 
-	/** The EmDash type for a Craft field, or null when the field becomes something other than a field (a taxonomy). */
-	private mapType(field: CraftField, ctx: Context, where: string, collection: string | undefined): Mapped | null {
+	/** The EmDash type for a Craft field, or the taxonomy name when the field becomes a taxonomy instead of a field. */
+	private mapType(field: CraftField, ctx: Context, where: string, collection: string | undefined): Mapped | string {
 		const s = field.settings;
 		switch (field.type) {
 			case "craft\\fields\\PlainText": {
 				const maxLength = num(s["charLimit"]);
-				return { type: s["multiline"] === true ? "text" : "string", ...(maxLength ? { validation: { maxLength } } : {}) };
+				return { kind: "scalar", type: s["multiline"] === true ? "text" : "string", ...(maxLength ? { validation: { maxLength } } : {}) };
 			}
 			case "craft\\fields\\Email":
 			case "craft\\fields\\Color":
 			case "craft\\fields\\Time":
 			case "craft\\fields\\Icon":
-				return { type: "string" };
+				return { kind: "scalar", type: "string" };
 			case "craft\\fields\\Url":
-				return { type: "url" };
+				return { kind: "scalar", type: "url" };
 			case "craft\\fields\\Link": {
 				const types = list(s["types"]);
 				if (types.some((t) => t !== "url")) {
 					this.note("info", "link_types", where, `Link field allows ${types.join(", ")}; the content pass stores each link as its resolved URL.`);
 				}
-				return { type: "url" };
+				return { kind: "link", type: "url" };
 			}
 			case "craft\\fields\\Number":
 			case "craft\\fields\\Range":
@@ -134,27 +203,27 @@ class SchemaMapper {
 				if (min !== undefined) validation["min"] = min;
 				if (max !== undefined) validation["max"] = max;
 				const integer = field.type === "craft\\fields\\Number" && !num(s["decimals"]);
-				return { type: integer ? "integer" : "number", ...(Object.keys(validation).length ? { validation } : {}) };
+				return { kind: "scalar", type: integer ? "integer" : "number", ...(Object.keys(validation).length ? { validation } : {}) };
 			}
 			case "craft\\fields\\Lightswitch":
-				return { type: "boolean", defaultValue: s["default"] === true };
+				return { kind: "scalar", type: "boolean", defaultValue: s["default"] === true };
 			case "craft\\fields\\Dropdown":
 			case "craft\\fields\\RadioButtons":
 			case "craft\\fields\\ButtonGroup":
-				return { type: "select", validation: { options: optionValues(s) } };
+				return { kind: "scalar", type: "select", validation: { options: optionValues(s) } };
 			case "craft\\fields\\Checkboxes":
 			case "craft\\fields\\MultiSelect":
 				if (ctx === "repeater") return this.fallback(ctx, field, where, "a repeater row cannot hold a multiple-choice field.");
-				return { type: "multiSelect", validation: { options: optionValues(s) } };
+				return { kind: "scalar", type: "multiSelect", validation: { options: optionValues(s) } };
 			case "craft\\fields\\Date":
-				return { type: "datetime" };
+				return { kind: "scalar", type: "datetime" };
 			case "craft\\ckeditor\\Field":
 			case "craft\\redactor\\Field":
 				if (ctx === "repeater") return this.fallback(ctx, field, where, "a repeater row cannot hold rich text.");
 				if (uidsOf(s["entryTypes"]).length > 0) {
 					this.note("decide", "richtext_nested_entries", where, "This rich text field embeds nested entries; they have no place in Portable Text yet and need a custom block.");
 				}
-				return { type: "portableText" };
+				return { kind: "richtext", type: "portableText" };
 			case "craft\\fields\\Assets":
 				return this.mapAssets(field, ctx, where);
 			case "craft\\fields\\Entries":
@@ -165,7 +234,7 @@ class SchemaMapper {
 					const set = this.taxonomyCollections.get(group) ?? new Set<string>();
 					set.add(collection);
 					this.taxonomyCollections.set(group, set);
-					return null;
+					return toSlug(this.project.categoryGroups.get(group)?.handle ?? group);
 				}
 				return this.fallback(ctx, field, where, "categories can only be assigned to a whole entry, not to a block inside it.");
 			}
@@ -182,13 +251,13 @@ class SchemaMapper {
 		const imagesOnly = s["restrictFiles"] === true && kinds.length === 1 && kinds[0] === "image";
 		const max = num(s["maxRelations"]);
 		if (max === 1) {
-			if (imagesOnly) return { type: "image" };
+			if (imagesOnly) return { kind: "image", type: "image" };
 			if (ctx === "repeater") return this.fallback(ctx, field, where, "a repeater row cannot hold a file.");
-			return { type: "file" };
+			return { kind: "file", type: "file" };
 		}
 		if (imagesOnly && ctx !== "repeater") {
 			const subFields: RepeaterSubField[] = [{ slug: "image", label: "Image", type: "image", required: true }];
-			return { type: "repeater", validation: { subFields, ...(max ? { maxItems: max } : {}) } };
+			return { kind: "images", type: "repeater", validation: { subFields, ...(max ? { maxItems: max } : {}) } };
 		}
 		return this.fallback(ctx, field, where, "EmDash has no field for several files.");
 	}
@@ -201,7 +270,7 @@ class SchemaMapper {
 		if (!target) {
 			return this.fallback(ctx, field, where, "a reference field targets one collection, and this field allows entries from several sections.");
 		}
-		return { type: "reference", validation: { targetCollection: target, multiple: num(field.settings["maxRelations"]) !== 1 } };
+		return { kind: "reference", type: "reference", validation: { targetCollection: target, multiple: num(field.settings["maxRelations"]) !== 1 } };
 	}
 
 	private mapMatrix(field: CraftField, ctx: Context, where: string): Mapped {
@@ -214,6 +283,8 @@ class SchemaMapper {
 		if (ctx === "collection") {
 			if (max && max > MAX_BLOCKS) this.note("info", "blocks_limit", where, `Craft allows ${max} entries; EmDash blocks fields hold at most ${MAX_BLOCKS}.`);
 			return {
+				kind: "blocks",
+				entryTypeUids: uids,
 				type: "blocks",
 				validation: { allowedTypes: uids.map((uid) => this.blockSlug(uid)), ...limits, ...(max ? { maxItems: Math.min(max, MAX_BLOCKS) } : {}) },
 			};
@@ -222,7 +293,7 @@ class SchemaMapper {
 		const entryType = uids.length === 1 ? this.project.entryTypes.get(uids[0] ?? "") : undefined;
 		if (ctx === "block" && entryType) {
 			const subFields = this.trySubFields(entryType, `${where} > entry type ${entryType.handle}`);
-			if (subFields) return { type: "repeater", validation: { subFields, ...limits } };
+			if (subFields) return { kind: "repeater", entryTypeUids: [entryType.uid], type: "repeater", validation: { subFields, ...limits } };
 		}
 		return this.fallback(ctx, field, where, "EmDash blocks cannot contain other blocks, and its nested entries are too rich for a repeater.");
 	}
@@ -231,13 +302,14 @@ class SchemaMapper {
 	private trySubFields(entryType: CraftEntryType, where: string): RepeaterSubField[] | null {
 		const notesBefore = this.notes.length;
 		const fallbacksBefore = this.fallbacks;
-		const fields = this.layoutFields(entryType, "repeater", where, undefined);
+		const { fields, plan } = this.layoutFields(entryType, "repeater", where, undefined);
 		const clean = this.fallbacks === fallbacksBefore && fields.length > 0 && fields.every((f) => REPEATER_TYPES.has(f.type));
 		if (!clean) {
 			this.notes.length = notesBefore;
 			this.fallbacks = fallbacksBefore;
 			return null;
 		}
+		this.rowPlans[entryType.uid] = plan;
 		return fields.map((f): RepeaterSubField => {
 			const options = f.type === "select" ? f.validation?.["options"] : undefined;
 			return {
@@ -261,19 +333,27 @@ class SchemaMapper {
 			this.note("decide", "missing_entry_type", `entry type ${uid}`, "A Matrix field names an entry type that is not in the project config.");
 			return slug;
 		}
-		const fields = this.layoutFields(entryType, "block", `block ${entryType.handle}`, undefined);
+		const { fields, plan } = this.layoutFields(entryType, "block", `block ${entryType.handle}`, undefined);
+		this.blockPlans[uid] = { ...plan, slug };
 		this.blockTypes.set(slug, { slug, label: entryType.name, currentVersion: 1, versions: [{ version: 1, fields }] });
 		return slug;
 	}
 
-	private layoutFields(entryType: CraftEntryType, ctx: Context, where: string, collection: string | undefined): SeedField[] {
+	private layoutFields(
+		entryType: CraftEntryType,
+		ctx: Context,
+		where: string,
+		collection: string | undefined,
+	): { fields: SeedField[]; plan: EntryPlan } {
 		const out: SeedField[] = [];
+		const plan: EntryPlan = { uid: entryType.uid, handle: entryType.handle, hasTitle: false, bindings: [] };
 		const used = new Set<string>();
 		const multiSite = this.project.sites.length > 1;
 
 		for (const el of entryType.elements) {
 			if (el.type.endsWith("\\EntryTitleField")) {
 				used.add("title");
+				plan.hasTitle = true;
 				out.push({ slug: "title", label: el.label ?? "Title", type: "string", required: true });
 				continue;
 			}
@@ -285,8 +365,12 @@ class SchemaMapper {
 			}
 			const handle = el.handle ?? field.handle;
 			const fieldWhere = `${where} > field ${handle}`;
-			const mapped = this.mapType(field, ctx, fieldWhere, collection);
-			if (!mapped) continue;
+			const result = this.mapType(field, ctx, fieldWhere, collection);
+			if (typeof result === "string") {
+				plan.bindings.push({ slug: result, handle, fieldUid: field.uid, kind: "taxonomy" });
+				continue;
+			}
+			const { kind, entryTypeUids, ...mapped } = result;
 
 			let slug = toSlug(handle);
 			if (RESERVED.has(slug)) {
@@ -299,6 +383,14 @@ class SchemaMapper {
 			const allowed = ctx === "collection" || (ctx === "block" ? BLOCK_TYPES : REPEATER_TYPES).has(mapped.type);
 			if (!allowed) throw new Error(`${fieldWhere}: mapped to ${mapped.type}, which EmDash does not allow in a ${ctx}`);
 
+			plan.bindings.push({
+				slug,
+				handle,
+				fieldUid: field.uid,
+				kind,
+				...(kind === "raw" && ctx !== "collection" ? { rawAsText: true } : {}),
+				...(entryTypeUids ? { entryTypeUids } : {}),
+			});
 			out.push({
 				slug,
 				label: el.label ?? field.name,
@@ -308,7 +400,7 @@ class SchemaMapper {
 				...(multiSite && field.translationMethod === "none" && ctx === "collection" ? { translatable: false } : {}),
 			});
 		}
-		return out;
+		return { fields: out, plan };
 	}
 
 	private collection(section: CraftSection, primarySite: string | undefined): SeedCollection {
@@ -329,8 +421,11 @@ class SchemaMapper {
 				validation: { options: entryTypes.map((et) => et.handle) },
 			});
 		}
+		const plans: EntryPlan[] = [];
 		for (const entryType of entryTypes) {
-			for (const field of this.layoutFields(entryType, "collection", `${where} > entry type ${entryType.handle}`, slug)) {
+			const layout = this.layoutFields(entryType, "collection", `${where} > entry type ${entryType.handle}`, slug);
+			plans.push(layout.plan);
+			for (const field of layout.fields) {
 				const existing = fields.find((f) => f.slug === field.slug);
 				// a field only some entry types have cannot be required of every entry
 				const merged = entryTypes.length > 1 && field.slug !== "title" ? { ...field, required: undefined } : field;
@@ -340,9 +435,13 @@ class SchemaMapper {
 					const renamed = `${field.slug}_${toSlug(entryType.handle)}`;
 					this.note("info", "field_type_clash", `${where} > field ${field.slug}`, `Entry types disagree on its type; ${entryType.handle}'s is named ${renamed}.`);
 					fields.push({ ...merged, slug: renamed });
+					const binding = layout.plan.bindings.find((b) => b.slug === field.slug && b.kind !== "taxonomy");
+					if (binding) binding.slug = renamed;
 				}
 			}
 		}
+
+		this.collectionPlans.push({ slug, section: section.handle, discriminator: entryTypes.length > 1, entryTypes: plans });
 
 		const out: SeedCollection = {
 			slug,
@@ -379,17 +478,36 @@ class SchemaMapper {
 			this.note("info", "locales", "sites", `Add these locales to the EmDash site's i18n configuration before importing content: ${locales}.`);
 		}
 
+		for (const plugin of this.project.plugins) {
+			const advice = PLUGIN_ADVICE[plugin.handle];
+			this.note(
+				advice ? "info" : "decide",
+				"plugin",
+				`plugin ${plugin.handle}${plugin.enabled ? "" : " (disabled)"}`,
+				advice ?? "No EmDash counterpart is known. Its settings and any data it stores are not converted.",
+			);
+		}
+
+		const { name, timeZone } = this.project.system;
+		const settings = { ...(name ? { title: name } : {}), ...(timeZone ? { timezone: timeZone } : {}) };
 		const blockTypes = [...this.blockTypes.values()];
 		const seed: SeedFile = {
 			$schema: "https://emdashcms.com/seed.schema.json",
 			version: "1",
 			defaultLocale: primary?.language ?? "en",
 			meta: { name: "Imported from Craft CMS", description: "Content model converted by craft-to-emdash" },
+			...(Object.keys(settings).length ? { settings } : {}),
 			...(blockTypes.length ? { blockTypes } : {}),
 			collections,
 			...(taxonomies.length ? { taxonomies } : {}),
 		};
-		return { seed, notes: this.notes };
+		const plan: Plan = {
+			collections: this.collectionPlans,
+			blocks: this.blockPlans,
+			rows: this.rowPlans,
+			taxonomies: [...this.project.categoryGroups.values()].map((g) => ({ name: toSlug(g.handle), group: g.handle })),
+		};
+		return { seed, notes: this.notes, plan };
 	}
 }
 

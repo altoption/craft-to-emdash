@@ -1,7 +1,7 @@
 import type { Note, SchemaResult } from "./map/schema.ts";
 
 /** A Markdown report of what was converted and what a person still has to decide. */
-export function renderReport({ seed, notes }: SchemaResult): string {
+export function renderReport({ seed, notes }: Pick<SchemaResult, "seed" | "notes">): string {
 	const fieldCount =
 		seed.collections.reduce((n, c) => n + c.fields.length, 0) +
 		(seed.blockTypes ?? []).reduce((n, b) => n + (b.versions[0]?.fields.length ?? 0), 0);
@@ -22,12 +22,13 @@ export function renderReport({ seed, notes }: SchemaResult): string {
 	};
 
 	return [
-		"# Craft to EmDash: schema report",
+		"# Craft to EmDash: conversion report",
 		"",
 		`- Collections: ${seed.collections.length}`,
 		`- Block types: ${seed.blockTypes?.length ?? 0}`,
 		`- Taxonomies: ${seed.taxonomies?.length ?? 0}`,
 		`- Fields: ${fieldCount}`,
+		...(seed.content ? [`- Entries: ${Object.values(seed.content).reduce((n, list) => n + list.length, 0)}`] : []),
 		`- Default locale: ${seed.defaultLocale}`,
 		`- Needs a decision: ${decide.length}`,
 		"",

@@ -55,7 +55,15 @@ export interface CraftCategoryGroup {
 	maxLevels: number | null;
 }
 
+export interface CraftPlugin {
+	handle: string;
+	enabled: boolean;
+}
+
 export interface CraftProject {
+	/** System name and time zone from project.yaml; undefined when unset or an environment variable. */
+	system: { name?: string; timeZone?: string };
+	plugins: CraftPlugin[];
 	sites: CraftSite[];
 	sections: CraftSection[];
 	entryTypes: Map<string, CraftEntryType>;
@@ -201,5 +209,15 @@ export function loadCraftProject(path: string): CraftProject {
 		}),
 	);
 
-	return { sites, sections, entryTypes, fields, categoryGroups };
+	const root = dict(unpackAssoc(parse(readFileSync(join(dir, "project.yaml"), "utf8"))));
+	const literal = (v: unknown): string | undefined => (typeof v === "string" && v !== "" && !v.startsWith("$") ? v : undefined);
+	const name = literal(dict(root["system"])["name"]);
+	const timeZone = literal(dict(root["system"])["timeZone"]);
+	const system = { ...(name ? { name } : {}), ...(timeZone ? { timeZone } : {}) };
+	const plugins = Object.entries(dict(root["plugins"])).map(
+		// a plugin loaded from a local path is keyed with a leading underscore
+		([handle, c]): CraftPlugin => ({ handle: handle.replace(/^_/, ""), enabled: dict(c)["enabled"] !== false }),
+	);
+
+	return { system, plugins, sites, sections, entryTypes, fields, categoryGroups };
 }

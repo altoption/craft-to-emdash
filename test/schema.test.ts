@@ -143,11 +143,21 @@ describe("schema pass on the fixture", () => {
 			validation: { options: ["page", "landingPage"] },
 		});
 		// a per-layout handle override that hits a reserved EmDash name
-		expect(field(fields, "craft_status").type).toBe("text");
+		expect(field(fields, "craft_byline").type).toBe("text");
 		// page's summary is text, landingPage's "summary" is a lightswitch under an overridden handle
 		expect(field(fields, "summary").type).toBe("text");
 		expect(field(fields, "summary_landing_page").type).toBe("boolean");
 		expect(codes("field_type_clash")).toEqual(["section pages > field summary"]);
+	});
+
+	it("carries the site's name and time zone, and says what happens to each plugin", () => {
+		expect(seed.settings).toEqual({ title: "Fixture Site", timezone: "Europe/London" });
+		const plugins = notes.filter((n) => n.code === "plugin");
+		expect(plugins.map((n) => [n.where, n.level])).toEqual([
+			["plugin ckeditor", "info"],
+			["plugin seomatic", "info"],
+			["plugin site-module", "decide"],
+		]);
 	});
 
 	it("reports URI formats it cannot express and the locales to configure", () => {

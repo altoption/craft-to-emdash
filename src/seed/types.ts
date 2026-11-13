@@ -60,6 +60,23 @@ export interface SeedTaxonomy {
 	label: string;
 	hierarchical: boolean;
 	collections: string[];
+	terms?: SeedTaxonomyTerm[];
+}
+
+export interface SeedTaxonomyTerm {
+	slug: string;
+	label: string;
+	parent?: string;
+}
+
+export interface SeedContentEntry {
+	id: string;
+	slug: string;
+	status: "published" | "draft";
+	locale?: string;
+	translationOf?: string;
+	data: Record<string, unknown>;
+	taxonomies?: Record<string, string[]>;
 }
 
 export interface SeedFile {
@@ -67,7 +84,9 @@ export interface SeedFile {
 	version: "1";
 	defaultLocale: string;
 	meta: { name: string; description: string };
+	settings?: { title?: string; timezone?: string };
 	blockTypes?: SeedBlockType[];
 	collections: SeedCollection[];
 	taxonomies?: SeedTaxonomy[];
+	content?: Record<string, SeedContentEntry[]>;
 }

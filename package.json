@@ -28,11 +28,13 @@
     "importer"
   ],
   "dependencies": {
+    "@emdash-cms/gutenberg-to-portable-text": "^1.5.0",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "emdash": "^1.5.0",
+    "graphql": "^17.1.0",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   }
