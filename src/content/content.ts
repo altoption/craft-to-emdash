@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CraftField, CraftProject } from "../craft/load.ts";
 import type { Binding, EntryPlan, Note, Plan } from "../map/schema.ts";
-import type { RepeaterSubField, SeedContentEntry, SeedField, SeedFile, SeedTaxonomyTerm } from "../seed/types.ts";
+import type { RepeaterSubField, SeedContentEntry, SeedField, SeedFile, SeedRedirect, SeedTaxonomyTerm } from "../seed/types.ts";
 import { introspect } from "./graphql.ts";
 import type { Execute, FieldType, TypeIndex } from "./graphql.ts";
 import { htmlToBlocks } from "./richtext.ts";
@@ -26,6 +26,8 @@ export interface ContentOptions {
 	/** Reuse sections saved in checkpointDir by an earlier run of the same queries. */
 	resume?: boolean;
 	onProgress?: (progress: Progress) => void;
+	/** One-line updates for the steps that are not sections: global sets, redirects. */
+	onMessage?: (message: string) => void;
 }
 
 export interface Progress {
@@ -56,7 +58,8 @@ const isLeaf = (t: FieldType): boolean => t.kind === "SCALAR" || t.kind === "ENU
  * Two entry types may give one handle to fields of different types, and GraphQL refuses a query whose fragments
  * select the same response name with different shapes. Aliasing each field by its entry type keeps them apart.
  */
-const aliased = (entryType: string, handle: string): string => `${entryType.replace(/_Entry$/, "")}__${handle}: ${handle}`;
+const aliased = (entryType: string, handle: string): string => `${entryType.replace(/_(Entry|GlobalSet)$/, "")}__${handle}: ${handle}`;
+const REDIRECT_CODES = new Set([301, 302, 307, 308]);
 const ALIAS = /^[A-Za-z0-9]+__/;
 
 class ContentReader {
@@ -128,7 +131,7 @@ class ContentReader {
 	}
 
 	private entryFragment(plan: EntryPlan): string {
-		const type = `${plan.handle}_Entry`;
+		const type = plan.gqlType;
 		const fields = plan.bindings.map((b) => this.selection(type, b)).filter((s): s is string => s !== null);
 		// __typename keeps the fragment valid when the entry type has no fields of its own
 		return `... on ${type} { __typename ${fields.join(" ")} }`;
@@ -196,7 +199,7 @@ class ContentReader {
 				const fragments = (b.entryTypeUids ?? [])
 					.map((uid) => plans[uid])
 					.filter((p): p is EntryPlan & { slug: string } => p !== undefined)
-					.filter((p) => this.offers(type, `${p.handle}_Entry`, `${parentType} > field ${b.handle}`))
+					.filter((p) => this.offers(type, p.gqlType, `${parentType} > field ${b.handle}`))
 					.map((p) => this.entryFragment(p));
 				return `${handle} { typeHandle title ${fragments.join(" ")} }`;
 			}
@@ -412,6 +415,74 @@ class ContentReader {
 			});
 	}
 
+	private async readGlobals(): Promise<Record<string, SeedContentEntry[]>> {
+		const { plan, seed, project, execute } = this.opts;
+		const readable = plan.globals.filter((g) => this.types.fields.has(g.plan.gqlType));
+		for (const g of plan.globals) {
+			if (!readable.includes(g)) this.note("decide", "not_readable", `global set ${g.plan.handle}`, "Craft's GraphQL schema does not include this global set, so it is not read. With --endpoint, give the token's schema access to it.");
+		}
+		if (readable.length === 0 || !this.types.fields.get("Query")?.has("globalSets")) return {};
+
+		const fragments = readable.map((g) => this.entryFragment(g.plan)).join(" ");
+		const { data } = await execute(`{ globalSets(site: ["*"]) { handle language ${fragments} } }`);
+		const multiSite = project.sites.length > 1;
+		const content: Record<string, SeedContentEntry[]> = {};
+		for (const g of readable) {
+			const versions = list(data["globalSets"]).filter(isObject).filter((row) => row["handle"] === g.plan.handle);
+			versions.sort((a, b) => Number(b["language"] === seed.defaultLocale) - Number(a["language"] === seed.defaultLocale));
+			const entries = versions.map((row, i): SeedContentEntry => {
+				const locale = typeof row["language"] === "string" ? row["language"] : seed.defaultLocale;
+				const { data: values, taxonomies } = this.entryData(g.plan, row, `collection:${g.slug}`);
+				return {
+					id: i === 0 ? `global-${g.plan.handle}` : `global-${g.plan.handle}-${locale}`,
+					status: "published",
+					...(multiSite ? { locale } : {}),
+					...(i > 0 ? { translationOf: `global-${g.plan.handle}` } : {}),
+					data: values,
+					...(Object.keys(taxonomies).length ? { taxonomies } : {}),
+				};
+			});
+			if (entries.length) content[g.slug] = entries;
+		}
+		return content;
+	}
+
+	/** Retour's static redirects, where its GraphQL query is available. EmDash redirects are exact, local paths. */
+	private async readRedirects(): Promise<SeedRedirect[]> {
+		if (!this.types.fields.get("Query")?.has("retourRedirects")) return [];
+		const { data } = await this.opts.execute("{ retourRedirects { redirectSrcUrl redirectDestUrl redirectHttpCode redirectMatchType enabled } }");
+		const local = (path: unknown): path is string =>
+			typeof path === "string" && /^\/(?!\/)/.test(path) && !/[\r\n]/.test(path) && !path.split(/[/?#]/).includes("..");
+		const redirects = new Map<string, SeedRedirect>();
+		const skipped = new Map<string, string[]>();
+		const skip = (reason: string, source: unknown): void => void skipped.set(reason, [...(skipped.get(reason) ?? []), String(source)]);
+
+		for (const row of list(data["retourRedirects"]).filter(isObject)) {
+			const raw = row["redirectSrcUrl"];
+			const source = typeof raw === "string" && raw !== "" && !raw.startsWith("/") && !/^[a-z]+:/i.test(raw) ? `/${raw}` : raw;
+			const code = row["redirectHttpCode"];
+			if (row["redirectMatchType"] !== "exactmatch") skip("it matches by pattern, and EmDash redirects match one exact path", raw);
+			else if (!local(source)) skip("its source is not a path on this site", raw);
+			else if (!local(row["redirectDestUrl"])) skip("it points to another site, and EmDash redirects stay on the site", raw);
+			else if (typeof code !== "number" || !REDIRECT_CODES.has(code)) skip(`its status code is ${String(code)}, and EmDash allows 301, 302, 307 and 308`, raw);
+			else if (redirects.has(source)) skip("another redirect already has this source", raw);
+			else {
+				redirects.set(source, {
+					source,
+					destination: row["redirectDestUrl"] as string,
+					type: code as SeedRedirect["type"],
+					enabled: row["enabled"] !== false,
+					groupName: "Craft (Retour)",
+				});
+			}
+		}
+		for (const [reason, sources] of skipped) {
+			const shown = sources.slice(0, 10).join(", ");
+			this.note("decide", "redirect_skipped", `${sources.length} ${sources.length === 1 ? "redirect" : "redirects"}: ${reason.split(",")[0]}`, `Not converted because ${reason}: ${shown}${sources.length > 10 ? `, and ${sources.length - 10} more` : ""}. Recreate these in EmDash or at your host.`);
+		}
+		return [...redirects.values()];
+	}
+
 	/** Collections that others reference come first: EmDash resolves a `$ref:` only to an entry created earlier. */
 	private ordered(collections: Plan["collections"]): Plan["collections"] {
 		const targets = new Map<string, Set<string>>();
@@ -478,8 +549,18 @@ class ContentReader {
 		if (checkpointDir) mkdirSync(checkpointDir, { recursive: true });
 		const content: Record<string, SeedContentEntry[]> = {};
 		const ordered = this.ordered(wanted);
-		for (const [i, collection] of ordered.entries()) {
-			const at = { section: collection.section, index: i + 1, total: ordered.length };
+		for (const [i, planned] of ordered.entries()) {
+			const at = { section: planned.section, index: i + 1, total: ordered.length };
+			// With --endpoint, a token whose schema lacks a section makes Craft answer with nothing rather than an error.
+			const visible = planned.entryTypes.filter((t) => this.types.fields.has(t.gqlType));
+			for (const t of planned.entryTypes) {
+				if (!visible.includes(t)) this.note("decide", "not_readable", `section ${planned.section} > entry type ${t.handle}`, "Craft's GraphQL schema does not include this entry type, so its entries are not read. With --endpoint, give the token's schema access to the section.");
+			}
+			if (visible.length === 0) {
+				onProgress?.({ ...at, fetched: 0, count: 0, state: "done" });
+				continue;
+			}
+			const collection = { ...planned, entryTypes: visible };
 			const query = this.entriesQuery(collection.entryTypes);
 			// a checkpoint is only good for the queries that made it: a changed content model reads the section again
 			const key = createHash("sha256").update(query).update(String(this.opts.baseUrl)).digest("hex");
@@ -515,8 +596,23 @@ class ContentReader {
 			}),
 		);
 
+		// --sections asks for those sections only
+		let redirects: SeedRedirect[] = [];
+		if (!sections) {
+			const globals = await this.readGlobals();
+			Object.assign(content, globals);
+			if (plan.globals.length) this.opts.onMessage?.(`global sets  ${Object.keys(globals).length} of ${plan.globals.length}`);
+			redirects = await this.readRedirects();
+			if (redirects.length || this.notes.some((n) => n.code === "redirect_skipped")) this.opts.onMessage?.(`redirects  ${redirects.length}`);
+		}
+
 		return {
-			seed: { ...this.relaxRequired(seed), ...(taxonomies.length ? { taxonomies } : {}), content },
+			seed: {
+				...this.relaxRequired(seed),
+				...(taxonomies.length ? { taxonomies } : {}),
+				content,
+				...(redirects.length ? { redirects } : {}),
+			},
 			notes: this.notes,
 		};
 	}

@@ -54,6 +54,8 @@ export interface Binding {
 export interface EntryPlan {
 	uid: string;
 	handle: string;
+	/** The GraphQL object type Craft generates for it: `<handle>_Entry`, or `<handle>_GlobalSet`. */
+	gqlType: string;
 	hasTitle: boolean;
 	bindings: Binding[];
 }
@@ -72,6 +74,8 @@ export interface Plan {
 	blocks: Record<string, EntryPlan & { slug: string }>;
 	/** Repeater row shapes by Craft entry type uid. */
 	rows: Record<string, EntryPlan>;
+	/** Global sets, each a collection holding one entry. */
+	globals: Array<{ slug: string; plan: EntryPlan }>;
 	taxonomies: Array<{ name: string; group: string }>;
 }
 
@@ -91,7 +95,7 @@ const PLUGIN_ADVICE: Record<string, string> = {
 	ckeditor: "Rich text is converted to Portable Text.",
 	redactor: "Rich text is converted to Portable Text.",
 	seomatic: "Per-entry SEO values are kept as JSON. Turn on `seo` for the collections that need it and map titles and descriptions by hand.",
-	retour: "Redirects live in Retour's own tables, not in entries. Export them from Retour as CSV; they are not converted yet.",
+	retour: "The content pass reads Retour's static redirects into the seed. Regular-expression redirects are listed for you to recreate.",
 	freeform: "Forms and submissions are not converted. Rebuild the forms with EmDash's forms plugin.",
 	formie: "Forms and submissions are not converted. Rebuild the forms with EmDash's forms plugin.",
 	"feed-me": "Feed definitions are not converted; imported entries are ordinary entries and come across with the content.",
@@ -146,6 +150,7 @@ class SchemaMapper {
 	private readonly blockPlans: Plan["blocks"] = {};
 	private readonly rowPlans: Plan["rows"] = {};
 	private readonly collectionPlans: CollectionPlan[] = [];
+	private readonly globalPlans: Plan["globals"] = [];
 	/** Counts fallbacks, so a trial mapping can tell whether it was clean. */
 	private fallbacks = 0;
 
@@ -344,9 +349,10 @@ class SchemaMapper {
 		ctx: Context,
 		where: string,
 		collection: string | undefined,
+		gqlType = `${entryType.handle}_Entry`,
 	): { fields: SeedField[]; plan: EntryPlan } {
 		const out: SeedField[] = [];
-		const plan: EntryPlan = { uid: entryType.uid, handle: entryType.handle, hasTitle: false, bindings: [] };
+		const plan: EntryPlan = { uid: entryType.uid, handle: entryType.handle, gqlType, hasTitle: false, bindings: [] };
 		const used = new Set<string>();
 		const multiSite = this.project.sites.length > 1;
 
@@ -463,9 +469,22 @@ class SchemaMapper {
 		return out;
 	}
 
+	/** EmDash has no global sets. Each becomes a collection without URLs, holding the one entry. */
+	private globalSet(set: CraftEntryType, taken: Set<string>): SeedCollection {
+		let slug = `global_${toSlug(set.handle)}`;
+		while (taken.has(slug)) slug = `${slug}_2`;
+		const where = `global set ${set.handle}`;
+		const { fields, plan } = this.layoutFields(set, "collection", where, slug, `${set.handle}_GlobalSet`);
+		this.globalPlans.push({ slug, plan });
+		this.note("info", "global_set", where, `EmDash has no global sets. It becomes the collection ${slug}, holding one entry; read it in your templates with getEmDashCollection("${slug}").`);
+		return { slug, label: set.name, routable: false, supports: ["revisions"], fields };
+	}
+
 	run(): SchemaResult {
 		const primary = this.project.sites.find((s) => s.primary) ?? this.project.sites[0];
 		const collections = this.project.sections.map((section) => this.collection(section, primary?.uid));
+		const taken = new Set(collections.map((c) => c.slug));
+		for (const set of this.project.globalSets) collections.push(this.globalSet(set, taken));
 
 		const taxonomies = [...this.project.categoryGroups.values()].map((group): SeedTaxonomy => {
 			const used = [...(this.taxonomyCollections.get(group.uid) ?? [])].sort();
@@ -505,6 +524,7 @@ class SchemaMapper {
 			collections: this.collectionPlans,
 			blocks: this.blockPlans,
 			rows: this.rowPlans,
+			globals: this.globalPlans,
 			taxonomies: [...this.project.categoryGroups.values()].map((g) => ({ name: toSlug(g.handle), group: g.handle })),
 		};
 		return { seed, notes: this.notes, plan };

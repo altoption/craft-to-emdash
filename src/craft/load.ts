@@ -66,6 +66,8 @@ export interface CraftProject {
 	plugins: CraftPlugin[];
 	sites: CraftSite[];
 	sections: CraftSection[];
+	/** Global sets have a handle, a name and a field layout, like an entry type. */
+	globalSets: CraftEntryType[];
 	entryTypes: Map<string, CraftEntryType>;
 	fields: Map<string, CraftField>;
 	categoryGroups: Map<string, CraftCategoryGroup>;
@@ -185,6 +187,10 @@ export function loadCraftProject(path: string): CraftProject {
 		]),
 	);
 
+	const globalSets = readFolder(dir, "globalSets").map(
+		([uid, c]): CraftEntryType => ({ uid, handle: str(c["handle"]), name: str(c["name"]), elements: layoutElements(c) }),
+	);
+
 	const fields = new Map(
 		readFolder(dir, "fields").map(([uid, c]): [string, CraftField] => [
 			uid,
@@ -219,5 +225,5 @@ export function loadCraftProject(path: string): CraftProject {
 		([handle, c]): CraftPlugin => ({ handle: handle.replace(/^_/, ""), enabled: dict(c)["enabled"] !== false }),
 	);
 
-	return { system, plugins, sites, sections, entryTypes, fields, categoryGroups };
+	return { system, plugins, sites, sections, globalSets, entryTypes, fields, categoryGroups };
 }

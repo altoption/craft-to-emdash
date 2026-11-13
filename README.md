@@ -50,6 +50,28 @@ Progress is printed per section. Each finished section is saved under `out/.chec
 three times, and `--resume` reuses what an earlier run finished. `seed.json` and the checkpoints hold your content,
 unpublished entries included: treat them like a database backup.
 
+## What this assumes about your setup
+
+The tool checks what it can and says so when something is off, but it cannot check everything:
+
+- **Craft 5, with project config on disk.** It reads `config/project/`, so that folder must match the database you
+  read content from. Run `craft project-config/write` first if you are unsure.
+- **`--craft` needs a console that works from the project root.** Give the exact command you would type there:
+  `php craft`, `ddev craft`, `docker compose exec -T php php craft`. A long query is sent through standard input, so
+  a container command must forward it (`docker exec -i`).
+- **`--endpoint` needs a schema that can read everything you want.** Craft answers a token that lacks a section with
+  nothing, not with an error. The report lists each section and global set the schema does not include; a section
+  missing from the report was read.
+- **EmDash must be able to fetch your assets.** Applying the seed downloads each asset from its URL. EmDash refuses
+  local and private addresses, so assets served from a development machine (`*.ddev.site`, `localhost`) are not
+  downloaded. Read from a copy whose assets are on a public URL, or apply with `--skip-media` and move the files
+  yourself.
+- **`emdash seed` writes to a local SQLite database.** For a site on Cloudflare D1, apply the seed locally and move
+  it with EmDash's site transfer, or use the seed at setup.
+- **Locales exist in EmDash first.** A multi-site Craft project needs each language added to the EmDash site's i18n
+  configuration before its content is applied. The report lists them.
+- **Node 22.18 or later** on the machine running this tool.
+
 ## What becomes what
 
 | Craft | EmDash |
@@ -64,6 +86,8 @@ unpublished entries included: treat them like a database backup.
 | Entries (one source section) | `reference` |
 | Categories | Taxonomy on the collection, with its terms |
 | Sites | Locales; an entry's other sites become its translations |
+| Global set | Collection without URLs, holding one entry |
+| Retour static redirects | Redirects |
 | System name and time zone | Site title and time zone |
 
 ## What does not fit
@@ -78,7 +102,10 @@ Read the report's decision count before judging how well a site fits EmDash.
 ## Things the report will tell you
 
 - **Plugins.** Each installed plugin is listed with what happens to it. Plugin settings do not transfer; some plugin
-  data can (per-entry SEO values are kept as JSON), some cannot yet (Retour's redirects).
+  data does (per-entry SEO values are kept as JSON, Retour's exact redirects become redirects).
+- **Redirects EmDash cannot hold.** Pattern redirects, redirects to another site and status codes other than 301,
+  302, 307 and 308 are listed for you to recreate.
+- **Sections the GraphQL schema cannot see.**
 - **Required fields that content leaves empty.** Craft only enforces "required" on live entries. Where real content
   has a gap, the field is made optional in the seed so EmDash accepts it.
 - **Duplicate slugs.** EmDash keys an entry by collection, slug and locale; a second entry with the same slug is
@@ -91,8 +118,7 @@ Read the report's decision count before judging how well a site fits EmDash.
 
 - Users, groups and permissions. EmDash does not import accounts, and Craft's password hashes would not work there.
 - Templates. Twig to Astro is a rebuild.
-- Form submissions, redirects stored by plugins, entry revisions and unpublished drafts of live entries.
-- Global sets.
+- Form submissions, entry revisions and unpublished drafts of live entries.
 - Nested lists in rich text are flattened by the HTML converter.
 - Craft 4 and older project config. Upgrade to Craft 5 first.
 

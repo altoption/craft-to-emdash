@@ -26,7 +26,7 @@ Options for content: give one of --craft or --endpoint
                        Needs no GraphQL schema or token; reads everything, drafts of status included.
   --endpoint <url>     Craft's GraphQL endpoint, e.g. https://example.com/api.
                        The token is read from the CRAFT_GQL_TOKEN environment variable.
-  --sections <a,b>     only these section handles (default: all)
+  --sections <a,b>     only these section handles (default: all sections, global sets and redirects)
   --base-url <url>     the site's URL, for assets Craft serves with root-relative URLs
   --page-size <n>      entries per request (default: 100)
   --resume             reuse the sections an interrupted run already finished
@@ -121,6 +121,7 @@ async function main(): Promise<number> {
 			checkpointDir: join(outDir, ".checkpoints"),
 			resume: values.resume,
 			onProgress: progressPrinter(),
+			onMessage: (message) => console.error(message),
 			...(values.sections ? { sections: values.sections.split(",").map((s) => s.trim()).filter(Boolean) } : {}),
 			...(values["base-url"] ? { baseUrl: values["base-url"] } : {}),
 		});

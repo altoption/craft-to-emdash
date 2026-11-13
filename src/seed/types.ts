@@ -51,6 +51,8 @@ export interface SeedCollection {
 	labelSingular?: string;
 	supports?: string[];
 	urlPattern?: string;
+	/** False for a collection whose entries have no public URL of their own, such as a Craft global set. */
+	routable?: boolean;
 	titleField?: string;
 	fields: SeedField[];
 }
@@ -71,12 +73,21 @@ export interface SeedTaxonomyTerm {
 
 export interface SeedContentEntry {
 	id: string;
-	slug: string;
+	/** Omitted for an entry in a collection that is not routable. */
+	slug?: string;
 	status: "published" | "draft";
 	locale?: string;
 	translationOf?: string;
 	data: Record<string, unknown>;
 	taxonomies?: Record<string, string[]>;
+}
+
+export interface SeedRedirect {
+	source: string;
+	destination: string;
+	type: 301 | 302 | 307 | 308;
+	enabled: boolean;
+	groupName: string;
 }
 
 export interface SeedFile {
@@ -89,4 +100,5 @@ export interface SeedFile {
 	collections: SeedCollection[];
 	taxonomies?: SeedTaxonomy[];
 	content?: Record<string, SeedContentEntry[]>;
+	redirects?: SeedRedirect[];
 }

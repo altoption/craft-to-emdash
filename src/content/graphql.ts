@@ -45,6 +45,8 @@ export function httpExecute(endpoint: string, token: string | undefined): Execut
 	};
 }
 
+const ARG_LIMIT = 20_000;
+
 /**
  * Runs queries inside Craft through its console (`<command> exec`), against a full-access schema.
  * It needs no GraphQL schema or token set up in Craft, only a working copy of the site: `php craft`, `ddev craft`…
@@ -57,14 +59,20 @@ export function consoleExecute(command: string[], cwd: string): Execute {
 		if (/^\s*mutation\b/.test(query)) throw new Error("craft-to-emdash only reads from Craft");
 		// base64 keeps the query intact through the shell and PHP's string parsing
 		const payload = Buffer.from(JSON.stringify({ query, variables: variables ?? {} })).toString("base64");
+		// A long query would overflow the command line (about 32 KB on Windows), so it goes through standard input.
+		const viaStdin = payload.length > ARG_LIMIT;
 		const php =
-			`$p=json_decode(base64_decode("${payload}"),true);` +
+			`$p=json_decode(base64_decode(${viaStdin ? "stream_get_contents(STDIN)" : `"${payload}"`}),true);` +
 			`echo "<<<C2E".json_encode(Craft::$app->getGql()->executeQuery(\\craft\\helpers\\Gql::createFullAccessSchema(),$p["query"],$p["variables"]))."C2E>>>";`;
 		return new Promise((resolve, reject) => {
-			execFile(bin, [...args, "exec", php], { cwd, maxBuffer: 1 << 30 }, (error, stdout, stderr) => {
+			const child = execFile(bin, [...args, "exec", php], { cwd, maxBuffer: 1 << 30 }, (error, stdout, stderr) => {
 				const json = stdout.match(/<<<C2E([\s\S]*)C2E>>>/)?.[1];
-				if (json === undefined) {
-					return reject(new Error(`\`${command.join(" ")} exec\` gave no result${error ? `: ${error.message}` : ""}\n${(stderr || stdout).slice(0, 500)}`));
+				if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+					return reject(new GraphqlRequestError(`Could not run "${bin}": the command was not found. Pass the command that runs Craft's console on this machine, e.g. --craft "php craft".`));
+				}
+				if (json === undefined || json === "null") {
+					const hint = viaStdin ? " This query was sent through standard input; if your command runs Craft in a container, make sure it forwards input (docker exec -i)." : "";
+					return reject(new Error(`\`${command.join(" ")} exec\` in ${cwd} gave no result${error ? `: ${error.message}` : ""}.${hint}\n${(stderr || stdout).slice(0, 500)}`));
 				}
 				try {
 					resolve(toResult(JSON.parse(json)));
@@ -72,6 +80,7 @@ export function consoleExecute(command: string[], cwd: string): Execute {
 					reject(e);
 				}
 			});
+			child.stdin?.end(viaStdin ? payload : undefined);
 		});
 	};
 }

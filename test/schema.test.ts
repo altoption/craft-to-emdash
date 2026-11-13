@@ -46,7 +46,7 @@ describe("schema pass on the fixture", () => {
 	});
 
 	it("turns each section into a collection", () => {
-		expect(seed.collections.map((c) => c.slug)).toEqual(["blog", "home", "pages"]);
+		expect(seed.collections.map((c) => c.slug)).toEqual(["blog", "home", "pages", "global_footer"]);
 		expect(seed.defaultLocale).toBe("en-US");
 		expect(collection("blog")).toMatchObject({
 			label: "Blog",
@@ -148,6 +148,20 @@ describe("schema pass on the fixture", () => {
 		expect(field(fields, "summary").type).toBe("text");
 		expect(field(fields, "summary_landing_page").type).toBe("boolean");
 		expect(codes("field_type_clash")).toEqual(["section pages > field summary"]);
+	});
+
+	it("turns a global set into a collection without URLs", () => {
+		expect(collection("global_footer")).toEqual({
+			slug: "global_footer",
+			label: "Footer",
+			routable: false,
+			supports: ["revisions"],
+			fields: [
+				{ slug: "summary", label: "Footer note", type: "text", validation: { maxLength: 280 } },
+				{ slug: "logo", label: "Logo", type: "image", translatable: false },
+			],
+		});
+		expect(codes("global_set")).toEqual(["global set footer"]);
 	});
 
 	it("carries the site's name and time zone, and says what happens to each plugin", () => {

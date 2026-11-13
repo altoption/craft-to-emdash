@@ -37,7 +37,12 @@ const schema = buildSchema(`
 	type quote_Entry implements EntryInterface & pageBuilder_MatrixField { ${ENTRY}
 		summary: String relatedArticles: [EntryInterface]! topics: [CategoryInterface]! slides: [slides_MatrixField]! }
 	type slide_Entry implements EntryInterface & slides_MatrixField { ${ENTRY} heading: String body: String }
+	interface GlobalSetInterface { handle: String! language: String }
+	type footer_GlobalSet implements GlobalSetInterface { handle: String! language: String summary: String logo: [AssetInterface]! }
+	type RetourType { redirectSrcUrl: String redirectDestUrl: String redirectHttpCode: Int redirectMatchType: String enabled: Boolean }
 	type Query {
+		globalSets(site: [String]): [GlobalSetInterface]
+		retourRedirects: [RetourType]
 		entries(section: [String], site: [String], status: [String], limit: Int, offset: Int, orderBy: String): [EntryInterface]
 		entryCount(section: [String], site: [String], status: [String]): Int!
 		categories(group: [String], site: [String], orderBy: String): [CategoryInterface]
@@ -83,9 +88,24 @@ const sections: Record<string, Row[]> = {
 	],
 };
 
-function fakeCraft(overrides: { failEntries?: boolean } = {}): { execute: Execute; queries: string[] } {
+const footer = (language: string, summary: string): Row => ({ __typename: "footer_GlobalSet", handle: "footer", language, summary, logo: [asset("logo.svg")] });
+const redirect = (redirectSrcUrl: string, redirectDestUrl: string, redirectHttpCode = 301, redirectMatchType = "exactmatch", enabled = true): Row => ({
+	redirectSrcUrl, redirectDestUrl, redirectHttpCode, redirectMatchType, enabled,
+});
+
+function fakeCraft(overrides: { failEntries?: boolean; schema?: typeof schema } = {}): { execute: Execute; queries: string[] } {
 	const queries: string[] = [];
 	const rootValue = {
+		// the secondary site comes first, as Craft may return it
+		globalSets: () => [footer("fr-FR", "Pied de page"), footer("en-US", "Small print")],
+		retourRedirects: () => [
+			redirect("/old", "/new"),
+			redirect("legacy/page", "/blog/hello", 302, "exactmatch", false),
+			redirect("/old", "/elsewhere"),
+			redirect("/shop/(.*)", "/store/$1", 301, "regexmatch"),
+			redirect("/partner", "https://partner.example/"),
+			redirect("/gone", "/", 410),
+		],
 		entries: ({ section, limit, offset }: { section: string[]; limit: number; offset: number }) => {
 			if (overrides.failEntries) throw new Error("Craft is down");
 			return (sections[section[0] ?? ""] ?? []).slice(offset, offset + limit);
@@ -95,7 +115,7 @@ function fakeCraft(overrides: { failEntries?: boolean } = {}): { execute: Execut
 	};
 	const execute: Execute = async (source, variableValues) => {
 		queries.push(source);
-		return toResult(await graphql({ schema, source, rootValue, variableValues: variableValues ?? {} }) as Parameters<typeof toResult>[0]);
+		return toResult(await graphql({ schema: overrides.schema ?? schema, source, rootValue, variableValues: variableValues ?? {} }) as Parameters<typeof toResult>[0]);
 	};
 	return { execute, queries };
 }
@@ -218,10 +238,60 @@ describe("content pass on the fixture", () => {
 	});
 });
 
+describe("global sets and redirects", () => {
+	it("reads a global set as the one entry of its collection, with its translations", () => {
+		expect(entries("global_footer")).toEqual([
+			{
+				id: "global-footer",
+				status: "published",
+				locale: "en-US",
+				data: { summary: "Small print", logo: { $media: { url: "https://craft.example/uploads/logo.svg", filename: "logo.svg" } } },
+			},
+			{
+				id: "global-footer-fr-FR",
+				status: "published",
+				locale: "fr-FR",
+				translationOf: "global-footer",
+				data: { summary: "Pied de page", logo: { $media: { url: "https://craft.example/uploads/logo.svg", filename: "logo.svg" } } },
+			},
+		]);
+	});
+
+	it("converts exact, local redirects and lists the ones EmDash cannot hold", () => {
+		expect(seed.redirects).toEqual([
+			{ source: "/old", destination: "/new", type: 301, enabled: true, groupName: "Craft (Retour)" },
+			{ source: "/legacy/page", destination: "/blog/hello", type: 302, enabled: false, groupName: "Craft (Retour)" },
+		]);
+		const skipped = notes.filter((n) => n.code === "redirect_skipped").map((n) => n.message);
+		expect(skipped).toHaveLength(4);
+		expect(skipped.join("\n")).toMatch(/another redirect already has this source: \/old\./);
+		expect(skipped.join("\n")).toMatch(/matches by pattern.*: \/shop\/\(\.\*\)\./);
+		expect(skipped.join("\n")).toMatch(/points to another site.*: \/partner\./);
+		expect(skipped.join("\n")).toMatch(/status code is 410.*: \/gone\./);
+	});
+
+	it("says so when the token's schema cannot see a section, instead of writing it empty", async () => {
+		// the same API as seen by a token with no access to landing pages or the footer
+		const { printSchema } = await import("graphql");
+		const limited = buildSchema(
+			printSchema(schema)
+				.replace(/type landingPage_Entry[^}]*}/, "")
+				.replace(/type footer_GlobalSet[^}]*}/, ""),
+		);
+		const partial = await run(fakeCraft({ schema: limited }).execute);
+		expect(partial.notes.filter((n) => n.code === "not_readable").map((n) => n.where)).toEqual([
+			"section pages > entry type landingPage",
+			"global set footer",
+		]);
+		expect(partial.seed.content?.["global_footer"]).toBeUndefined();
+	});
+});
+
 describe("running the content pass", () => {
 	it("reads only the sections asked for, and rejects one that does not exist", async () => {
 		const only = await run(fakeCraft().execute, { sections: ["home"] });
 		expect(Object.keys(only.seed.content ?? {})).toEqual(["home"]);
+		expect(only.seed.redirects).toBeUndefined();
 		await expect(run(fakeCraft().execute, { sections: ["nope"] })).rejects.toThrow('No section "nope"');
 	});
 
