@@ -69,12 +69,21 @@ export function httpExecute(endpoint: string, token: string | undefined, options
 			signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 		});
 		const text = await response.text();
+		let body: Parameters<typeof toResult>[0] & { message?: unknown };
 		try {
-			return toResult(JSON.parse(text));
-		} catch (error) {
-			if (!(error instanceof SyntaxError)) throw error;
+			body = JSON.parse(text);
+		} catch {
 			throw new Error(`${endpoint} answered ${response.status} with something other than JSON: ${text.slice(0, 200)}`);
 		}
+		// Craft refuses a request it will not run at all with a plain error object, not a GraphQL response.
+		if (!response.ok && !body.data && !body.errors) {
+			const reason = typeof body.message === "string" ? body.message : text.slice(0, 200);
+			const hint = token
+				? "Check that the token is enabled and has not expired."
+				: "No token was sent: put the GraphQL token in the CRAFT_GQL_TOKEN environment variable.";
+			throw new GraphqlRequestError(`${endpoint} answered ${response.status}: ${reason}. ${hint}`);
+		}
+		return toResult(body);
 	};
 }
 

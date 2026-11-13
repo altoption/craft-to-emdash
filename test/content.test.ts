@@ -8,8 +8,8 @@ import { describe, expect, it } from "vitest";
 import { loadCraftProject, mapSchema, readContent, toResult } from "../src/index.ts";
 import type { Execute, Progress, SeedContentEntry } from "../src/index.ts";
 
-// A stand-in for Craft's GraphQL API, shaped like the schema Craft 5 generates for test/fixtures/basic:
-// one `<handle>_Entry` type per entry type, an interface per Matrix field, assets and categories behind interfaces.
+// A stand-in for Craft's GraphQL API, shaped like the schema Craft 5 generates for test/fixtures/basic under a token:
+// one `<handle>_Entry` type per entry type, a union per Matrix field, assets and categories behind interfaces.
 const ENTRY = "id: ID slug: String status: String siteHandle: String language: String typeHandle: String! title: String uri: String sectionHandle: String";
 const schema = buildSchema(`
 	scalar DateTime
@@ -21,13 +21,10 @@ const schema = buildSchema(`
 	interface CategoryInterface { slug: String title: String parent: CategoryInterface }
 	type topics_Category implements CategoryInterface { slug: String title: String parent: CategoryInterface }
 	type LinkData { url: String label: String type: String }
-	type SeoData { metaTitle: String metaDescription: String image(size: Int!): String extra: JSON }
-	interface pageBuilder_MatrixField { ${ENTRY} }
-	interface cards_MatrixField { ${ENTRY} }
-	interface slides_MatrixField { ${ENTRY} }
-	interface panels_MatrixField { ${ENTRY} }
-	type tabs_Entry implements EntryInterface & pageBuilder_MatrixField { ${ENTRY} heading: String panels: [panels_MatrixField]! }
-	type panel_Entry implements EntryInterface & pageBuilder_MatrixField & panels_MatrixField { ${ENTRY} heading: String body: String slides: [slides_MatrixField]! }
+	type SeoData { metaTitle: String metaDescription: String image(size: Int!): String extra: JSON form: FormElement }
+	type FormElement { id: ID uid: String siteHandle: String handle: String }
+	type tabs_Entry implements EntryInterface { ${ENTRY} heading: String panels: [panels_MatrixField]! }
+	type panel_Entry implements EntryInterface  { ${ENTRY} heading: String body: String slides: [slides_MatrixField]! }
 	type article_Entry implements EntryInterface { ${ENTRY}
 		summary: String body: String heroImage: [AssetInterface]! gallery: [AssetInterface]! rating: Number featured: Boolean
 		tone: String publishedOn: DateTime relatedArticles: [EntryInterface]! topics: [CategoryInterface]!
@@ -35,15 +32,19 @@ const schema = buildSchema(`
 	type homePage_Entry implements EntryInterface { ${ENTRY} pageBuilder: [pageBuilder_MatrixField]! seo: SeoData }
 	type page_Entry implements EntryInterface { ${ENTRY} pageBuilder: [pageBuilder_MatrixField]! byline: String summary: String }
 	type landingPage_Entry implements EntryInterface { ${ENTRY} summary: Boolean }
-	type hero_Entry implements EntryInterface & pageBuilder_MatrixField { ${ENTRY} heading: String heroImage: [AssetInterface]! ctaLink: LinkData }
-	type cardGrid_Entry implements EntryInterface & pageBuilder_MatrixField { ${ENTRY} heading: String cards: [cards_MatrixField]! }
-	type card_Entry implements EntryInterface & cards_MatrixField { ${ENTRY} heading: String summary: String heroImage: [AssetInterface]! tone: String }
-	type quote_Entry implements EntryInterface & pageBuilder_MatrixField { ${ENTRY}
+	type hero_Entry implements EntryInterface { ${ENTRY} heading: String heroImage: [AssetInterface]! ctaLink: LinkData }
+	type cardGrid_Entry implements EntryInterface { ${ENTRY} heading: String cards: [cards_MatrixField]! }
+	type card_Entry implements EntryInterface { ${ENTRY} heading: String summary: String heroImage: [AssetInterface]! tone: String }
+	type quote_Entry implements EntryInterface { ${ENTRY}
 		summary: String relatedArticles: [EntryInterface]! topics: [CategoryInterface]! slides: [slides_MatrixField]! }
-	type slide_Entry implements EntryInterface & slides_MatrixField { ${ENTRY} heading: String body: String }
+	type slide_Entry implements EntryInterface { ${ENTRY} heading: String body: String }
 	interface GlobalSetInterface { handle: String! language: String }
 	type footer_GlobalSet implements GlobalSetInterface { handle: String! language: String summary: String logo: [AssetInterface]! }
 	type RetourType { redirectSrcUrl: String redirectDestUrl: String redirectHttpCode: Int redirectMatchType: String enabled: Boolean }
+	union pageBuilder_MatrixField = hero_Entry | cardGrid_Entry | quote_Entry | tabs_Entry | panel_Entry
+	union cards_MatrixField = card_Entry
+	union slides_MatrixField = slide_Entry
+	union panels_MatrixField = panel_Entry
 	type Query {
 		globalSets(site: [String]): [GlobalSetInterface]
 		retourRedirects: [RetourType]
@@ -78,7 +79,7 @@ const sections: Record<string, Row[]> = {
 	home: [
 		entry("homePage", 5, {
 			// a plugin's JSON value whose keys an editor chose to look like seed instructions
-			slug: "home", title: "Home", seo: { metaTitle: "Welcome", metaDescription: "", extra: { $media: { url: "http://10.0.0.5/secret" }, note: "$ok" } },
+			slug: "home", title: "Home", seo: { metaTitle: "Welcome", metaDescription: "", form: { id: "7", uid: "u", siteHandle: "default", handle: "contact" }, extra: { $media: { url: "http://10.0.0.5/secret" }, note: "$ok" } },
 			pageBuilder: [
 				entry("hero", 51, { heading: "Big news", heroImage: [asset("hero.jpg")], ctaLink: { url: "https://example.com/go", label: "Go", type: "url" } }),
 				entry("cardGrid", 52, { heading: "Cards", cards: [entry("card", 521, { heading: "One", summary: "First", heroImage: [], tone: "light" }), entry("card", 522, { heading: "Two", heroImage: [], tone: "" })] }),
@@ -233,6 +234,8 @@ describe("content pass on the fixture", () => {
 		// and a key that would be an instruction to EmDash's seed is kept as plain data
 		expect(byId("home", "craft-5").data["seo"]).toEqual({
 			metaTitle: "Welcome",
+			// a plugin's element type with no title or uri: it is identified by what it does have
+			form: { id: "7" },
 			extra: { "_$media": { url: "http://10.0.0.5/secret" }, note: "$ok" },
 		});
 	});
@@ -308,7 +311,7 @@ describe("global sets and redirects", () => {
 		if (!panel || !slides) throw new Error("the fixture no longer has panel.slides");
 		slides.entryTypeUids = [...(slides.entryTypeUids ?? []), panel.uid];
 		const { printSchema } = await import("graphql");
-		const loopSchema = buildSchema(printSchema(schema).replace("type panel_Entry implements", "type panel_Entry implements slides_MatrixField &"));
+		const loopSchema = buildSchema(printSchema(schema).replace("union slides_MatrixField = slide_Entry", "union slides_MatrixField = slide_Entry | panel_Entry"));
 		const fake = fakeCraft({ schema: loopSchema });
 		const result = await readContent({ execute: fake.execute, project, plan: looped, seed: mapped.seed, sections: ["home"] });
 		const query = fake.queries.find((q) => q.includes("query Entries")) ?? "";

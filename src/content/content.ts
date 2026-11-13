@@ -63,6 +63,11 @@ const isLeaf = (t: FieldType): boolean => t.kind === "SCALAR" || t.kind === "ENU
  */
 const aliased = (entryType: string, handle: string): string => `${entryType.replace(/_(Entry|GlobalSet)$/, "")}__${handle}: ${handle}`;
 const REDIRECT_CODES = new Set([301, 302, 307, 308]);
+/**
+ * What is read of every nested entry. A Matrix field's type is an interface under a full-access schema and a union
+ * under a token's schema, and a union has no fields of its own, so these are asked for through the entry interface.
+ */
+const NESTED_ENTRY = "... on EntryInterface { typeHandle title }";
 const MAX_BLOCKS = 100;
 const MAX_SELF_NESTING = 3;
 /** Changes whenever what a checkpoint holds changes, so an older run's files are read again rather than misread. */
@@ -118,8 +123,15 @@ class ContentReader {
 	private generic(typeName: string, depth: number): string {
 		const fields = this.types.fields.get(typeName);
 		if (!fields) return "__typename";
-		// an element (entry, asset, category, user): identify it rather than walking all of it
-		if (fields.has("uid") && fields.has("siteHandle")) return "id title uri";
+		// An element (entry, asset, category, user): identify it rather than walking all of it. A plugin's element type
+		// need not have every one of these, so only the ones it declares are asked for.
+		if (fields.has("uid") && fields.has("siteHandle")) {
+			const known = ["id", "title", "uri"].filter((name) => {
+				const type = fields.get(name);
+				return type !== undefined && isLeaf(type) && !type.requiresArgs;
+			});
+			return known.length ? known.join(" ") : "__typename";
+		}
 		const parts: string[] = [];
 		for (const [name, type] of fields) {
 			if (type.requiresArgs) continue;
@@ -178,7 +190,7 @@ class ContentReader {
 						.filter((s): s is string => s !== null);
 					fragments.push(`... on ${nested} { __typename ${inner.join(" ")} }`);
 				}
-				return `${handle} { typeHandle title ${fragments.join(" ")} }`;
+				return `${handle} { ${NESTED_ENTRY} ${fragments.join(" ")} }`;
 			}
 			default:
 				return `${handle} { ${this.generic(type.name, 1)} }`;
@@ -221,7 +233,7 @@ class ContentReader {
 						return false;
 					})
 					.map((p) => this.entryFragment(p, stack));
-				return `${handle} { typeHandle title ${fragments.join(" ")} }`;
+				return `${handle} { ${NESTED_ENTRY} ${fragments.join(" ")} }`;
 			}
 		}
 	}

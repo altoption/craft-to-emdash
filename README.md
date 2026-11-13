@@ -2,8 +2,25 @@
 
 Convert a [Craft CMS](https://craftcms.com) 5 project into an [EmDash](https://github.com/emdash-cms/emdash) seed file.
 
-Status: early, and not yet published to npm. Both passes work and have been run against a real Craft 5 site, with the
-result applied to a fresh EmDash database.
+It reads the content model from Craft's project config and the content over Craft's GraphQL API, and writes one
+`seed.json` that EmDash applies, plus a report of everything a person still has to decide. It only reads from Craft.
+
+Status: early, and not yet published to npm. It has been run end to end against one real Craft 5.10 site (28
+collections, 58 block types, 250 entries, 35 redirects, 320 assets), through both ways of reaching Craft, with the
+seed applied to a fresh EmDash 1.5 database. Expect rough edges on setups unlike that one, and please report them.
+
+## Install
+
+Until it is on npm, run it from a checkout:
+
+```bash
+git clone https://github.com/altoption/craft-to-emdash.git
+cd craft-to-emdash
+npm install && npm run build
+node dist/cli.js --help
+```
+
+The examples below use `npx craft-to-emdash`; from a checkout, use `node dist/cli.js` in its place.
 
 ## Use
 
@@ -37,8 +54,26 @@ The content pass reads entries through Craft's GraphQL API. Pick how it reaches 
 | `--endpoint <url>` | You only have the live site | A GraphQL schema that can read every section, and its token in `CRAFT_GQL_TOKEN` |
 
 `--craft` runs each query inside Craft against a full-access schema, so it sees every section and status without a
-schema or token being created. Either way the tool only reads: every request is parsed before it is sent, and
-anything other than a single query is refused.
+schema or token being created. Use it when you can.
+
+For `--endpoint`:
+
+```bash
+CRAFT_GQL_TOKEN=… npx craft-to-emdash content path/to/craft-project \
+  --endpoint https://example.com/api --out out
+```
+
+- **The URL** is whatever route your site maps to `graphql/api`, often `/api`. A site with no such route still
+  answers at `/actions/graphql/api`.
+- **The schema** is made in Craft's control panel under GraphQL → Schemas. Give it read access to every section and
+  entry type, global set, category group and asset volume you want converted, then create a token for it.
+- **A schema is part of project config.** Creating one changes files under `config/project/` on that environment.
+  Make it on a copy of the site, or remove it afterwards.
+- **The project folder is still needed.** `--endpoint` replaces how content is read, not where the content model
+  comes from.
+
+Either way the tool only reads: every request is parsed before it is sent, and anything other than a single query is
+refused. Both ways give the same seed.
 
 Other options:
 
@@ -57,7 +92,7 @@ unpublished entries included: treat them like a database backup.
 
 The tool checks what it can and says so when something is off, but it cannot check everything:
 
-- **Craft 5, with project config on disk.** It reads `config/project/`, so that folder must match the database you
+- **Craft 5, any edition, with project config on disk.** It reads `config/project/`, so that folder must match the database you
   read content from. Run `craft project-config/write` first if you are unsure.
 - **`--craft` needs a console that works from the project root.** Give the exact command you would type there:
   `php craft`, `ddev craft`, `docker compose exec -T php php craft`. A long query is sent through standard input, so
@@ -139,7 +174,8 @@ Read the report's decision count before judging how well a site fits EmDash.
   data does (per-entry SEO values are kept as JSON, Retour's exact redirects become redirects).
 - **Redirects EmDash cannot hold.** Pattern redirects, redirects to another site and status codes other than 301,
   302, 307 and 308 are listed for you to recreate.
-- **Sections the GraphQL schema cannot see.**
+- **Sections the GraphQL schema cannot see.** With `--endpoint`, each section and global set the token's schema
+  leaves out is listed, since Craft would otherwise answer with nothing and the gap would go unnoticed.
 - **Required fields that content leaves empty.** Craft only enforces "required" on live entries. Where real content
   has a gap, the field is made optional in the seed so EmDash accepts it.
 - **Duplicate slugs.** EmDash keys an entry by collection, slug and locale; a second entry with the same slug is
