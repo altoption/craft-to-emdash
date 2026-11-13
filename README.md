@@ -139,6 +139,12 @@ Requires Node 22.18 or later. `test/fixtures/basic` is a synthetic Craft project
 See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) before opening a pull request, and [AGENTS.md](AGENTS.md) for the
 code conventions. Vulnerabilities: [docs/SECURITY.md](docs/SECURITY.md).
 
+## How this was built
+
+The code, tests and documents in this repository were written with AI assistance (Claude Code, model Claude Fable 5.2),
+directed and reviewed by the maintainer. That is the disclosure the project's own [AI usage policy](docs/AI_POLICY.md)
+asks of every contributor.
+
 ## License
 
 MIT
