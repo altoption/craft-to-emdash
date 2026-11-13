@@ -1,0 +1,9 @@
+handle: heroImage
+name: 'Hero Image'
+settings:
+  allowedKinds:
+    - image
+  maxRelations: 1
+  restrictFiles: true
+translationMethod: none
+type: craft\fields\Assets

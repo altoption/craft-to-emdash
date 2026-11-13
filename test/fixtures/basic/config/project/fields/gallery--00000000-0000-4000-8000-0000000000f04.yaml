@@ -1,0 +1,9 @@
+handle: gallery
+name: 'Gallery'
+settings:
+  allowedKinds:
+    - image
+  maxRelations: 8
+  restrictFiles: true
+translationMethod: none
+type: craft\fields\Assets

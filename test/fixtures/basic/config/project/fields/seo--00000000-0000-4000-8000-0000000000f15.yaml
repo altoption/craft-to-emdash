@@ -1,0 +1,6 @@
+handle: seo
+name: 'SEO'
+settings:
+  elementDisplayPreviewType: ''
+translationMethod: site
+type: nystudio107\seomatic\fields\SeoSettings

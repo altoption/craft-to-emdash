@@ -1,0 +1,87 @@
+fieldLayouts:
+  00000000-0000-4000-8000-00000000le1:
+    tabs:
+      -
+        elements:
+          -
+            label: null
+            required: true
+            type: craft\fieldlayoutelements\entries\EntryTitleField
+          -
+            type: craft\fieldlayoutelements\Heading
+            heading: Content
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f01
+            handle: null
+            label: null
+            required: true
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f02
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f03
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f04
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f05
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f06
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f07
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f08
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f09
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f10
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f16
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f17
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+handle: article
+hasTitleField: true
+name: 'Article'

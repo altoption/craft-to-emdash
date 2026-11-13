@@ -1,0 +1,11 @@
+enableVersioning: true
+entryTypes:
+  -
+    uid: 00000000-0000-4000-8000-0000000000e1
+handle: blog
+name: 'Blog'
+siteSettings:
+  00000000-0000-4000-8000-0000000000s1:
+    hasUrls: true
+    uriFormat: 'blog/{slug}'
+type: channel

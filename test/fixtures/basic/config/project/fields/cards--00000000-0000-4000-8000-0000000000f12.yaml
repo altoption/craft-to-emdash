@@ -1,0 +1,13 @@
+handle: cards
+name: 'Cards'
+settings:
+  entryTypes:
+    -
+      __assoc__:
+        -
+          - uid
+          - 00000000-0000-4000-8000-0000000000e6
+  maxEntries: 6
+  minEntries: 1
+translationMethod: site
+type: craft\fields\Matrix

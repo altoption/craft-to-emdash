@@ -1,0 +1,7 @@
+handle: summary
+name: 'Summary'
+settings:
+  charLimit: 280
+  multiline: true
+translationMethod: site
+type: craft\fields\PlainText

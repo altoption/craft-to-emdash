@@ -1,0 +1,8 @@
+handle: rating
+name: 'Rating'
+settings:
+  decimals: 0
+  max: 5
+  min: 1
+translationMethod: none
+type: craft\fields\Number

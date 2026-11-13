@@ -1,0 +1,5 @@
+handle: topics
+name: Topics
+structure:
+  maxLevels: 2
+  uid: 00000000-0000-4000-8000-0000000000t1

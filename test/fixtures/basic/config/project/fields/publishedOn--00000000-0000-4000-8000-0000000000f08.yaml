@@ -1,0 +1,6 @@
+handle: publishedOn
+name: 'Published On'
+settings:
+  showDate: true
+translationMethod: none
+type: craft\fields\Date

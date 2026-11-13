@@ -1,0 +1,28 @@
+handle: tone
+name: 'Tone'
+settings:
+  options:
+    -
+      __assoc__:
+        -
+          - label
+          - Light
+        -
+          - value
+          - light
+        -
+          - default
+          - '1'
+    -
+      __assoc__:
+        -
+          - label
+          - Dark
+        -
+          - value
+          - dark
+        -
+          - default
+          - ''
+translationMethod: none
+type: craft\fields\Dropdown

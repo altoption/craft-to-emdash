@@ -1,0 +1,39 @@
+{
+  "name": "craft-to-emdash",
+  "version": "0.0.0",
+  "description": "Convert a Craft CMS 5 project into an EmDash seed file",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "craft-to-emdash": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "node src/cli.ts"
+  },
+  "keywords": [
+    "craftcms",
+    "emdash",
+    "migration",
+    "importer"
+  ],
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "emdash": "^1.5.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

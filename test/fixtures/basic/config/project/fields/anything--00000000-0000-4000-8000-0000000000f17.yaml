@@ -1,0 +1,7 @@
+handle: anything
+name: 'Anything'
+settings:
+  maxRelations: 1
+  sources: '*'
+translationMethod: none
+type: craft\fields\Entries

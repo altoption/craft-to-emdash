@@ -1,0 +1,21 @@
+fieldLayouts:
+  00000000-0000-4000-8000-00000000le7:
+    tabs:
+      -
+        elements:
+          -
+            label: null
+            required: true
+            type: craft\fieldlayoutelements\entries\EntryTitleField
+          -
+            type: craft\fieldlayoutelements\Heading
+            heading: Content
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f06
+            handle: summary
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+handle: landingPage
+hasTitleField: true
+name: 'Landing Page'

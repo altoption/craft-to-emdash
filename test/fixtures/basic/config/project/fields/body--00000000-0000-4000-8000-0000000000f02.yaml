@@ -1,0 +1,8 @@
+handle: body
+name: 'Body'
+settings:
+  headingLevels:
+    - 2
+    - 3
+translationMethod: site
+type: craft\ckeditor\Field

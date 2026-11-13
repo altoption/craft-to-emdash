@@ -1,0 +1,8 @@
+handle: ctaLink
+name: 'CTA Link'
+settings:
+  types:
+    - url
+    - entry
+translationMethod: none
+type: craft\fields\Link

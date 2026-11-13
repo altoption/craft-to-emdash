@@ -1,0 +1,6 @@
+handle: featured
+name: 'Featured'
+settings:
+  default: true
+translationMethod: none
+type: craft\fields\Lightswitch

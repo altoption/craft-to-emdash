@@ -1,0 +1,13 @@
+enableVersioning: true
+entryTypes:
+  -
+    uid: 00000000-0000-4000-8000-0000000000e3
+  -
+    uid: 00000000-0000-4000-8000-0000000000e7
+handle: pages
+name: 'Pages'
+siteSettings:
+  00000000-0000-4000-8000-0000000000s1:
+    hasUrls: true
+    uriFormat: '{parent.uri}/{slug}'
+type: structure

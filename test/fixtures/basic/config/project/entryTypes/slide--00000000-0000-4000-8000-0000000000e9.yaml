@@ -1,0 +1,23 @@
+fieldLayouts:
+  00000000-0000-4000-8000-00000000le9:
+    tabs:
+      -
+        elements:
+          -
+            type: craft\fieldlayoutelements\Heading
+            heading: Content
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f13
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f02
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+handle: slide
+hasTitleField: false
+name: 'Slide'

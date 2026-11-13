@@ -1,0 +1,13 @@
+handle: slides
+name: 'Slides'
+settings:
+  entryTypes:
+    -
+      __assoc__:
+        -
+          - uid
+          - 00000000-0000-4000-8000-0000000000e9
+  maxEntries: null
+  minEntries: null
+translationMethod: site
+type: craft\fields\Matrix

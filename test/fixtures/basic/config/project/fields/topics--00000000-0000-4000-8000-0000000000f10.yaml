@@ -1,0 +1,7 @@
+handle: topics
+name: 'Topics'
+settings:
+  maxRelations: 3
+  source: 'group:00000000-0000-4000-8000-0000000000c1'
+translationMethod: site
+type: craft\fields\Categories

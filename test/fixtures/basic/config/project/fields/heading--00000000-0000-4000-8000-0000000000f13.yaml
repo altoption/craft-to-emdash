@@ -1,0 +1,7 @@
+handle: heading
+name: 'Heading'
+settings:
+  charLimit: null
+  multiline: false
+translationMethod: site
+type: craft\fields\PlainText

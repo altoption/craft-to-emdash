@@ -1,0 +1,8 @@
+handle: relatedArticles
+name: 'Related Articles'
+settings:
+  maxRelations: null
+  sources:
+    - 'section:00000000-0000-4000-8000-0000000000a1'
+translationMethod: none
+type: craft\fields\Entries

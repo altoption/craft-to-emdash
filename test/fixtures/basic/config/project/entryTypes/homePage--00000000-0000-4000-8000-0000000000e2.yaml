@@ -1,0 +1,27 @@
+fieldLayouts:
+  00000000-0000-4000-8000-00000000le2:
+    tabs:
+      -
+        elements:
+          -
+            label: null
+            required: true
+            type: craft\fieldlayoutelements\entries\EntryTitleField
+          -
+            type: craft\fieldlayoutelements\Heading
+            heading: Content
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f11
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+          -
+            fieldUid: 00000000-0000-4000-8000-0000000000f15
+            handle: null
+            label: null
+            required: false
+            type: craft\fieldlayoutelements\CustomField
+handle: homePage
+hasTitleField: true
+name: 'Home Page'

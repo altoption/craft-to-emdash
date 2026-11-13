@@ -1,0 +1,8 @@
+handle: attachments
+name: 'Attachments'
+settings:
+  allowedKinds: null
+  maxRelations: null
+  restrictFiles: false
+translationMethod: none
+type: craft\fields\Assets

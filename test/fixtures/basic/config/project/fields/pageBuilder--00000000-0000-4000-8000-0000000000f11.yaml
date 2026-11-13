@@ -1,0 +1,23 @@
+handle: pageBuilder
+name: 'Page Builder'
+settings:
+  entryTypes:
+    -
+      __assoc__:
+        -
+          - uid
+          - 00000000-0000-4000-8000-0000000000e4
+    -
+      __assoc__:
+        -
+          - uid
+          - 00000000-0000-4000-8000-0000000000e5
+    -
+      __assoc__:
+        -
+          - uid
+          - 00000000-0000-4000-8000-0000000000e8
+  maxEntries: 250
+  minEntries: null
+translationMethod: site
+type: craft\fields\Matrix
